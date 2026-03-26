@@ -1,484 +1,86 @@
-# Архитектура агента-преподавателя PersonaLab Workshop
+# AI Professor — ИИ-агент-преподаватель PersonaLab Workshop
 
-**Проект:** ИИ-агент-преподаватель для 8-недельного воркшопа по созданию цифровых персонажей  
-**Платформа:** ИТМО AI Talent Hub / PersonaLab  
-**Трек ВКР:** Образовательный  
-**Статус:** Лекции уже идут. Критический дедлайн.
+## Что это
 
----
+ИИ-агент-преподаватель для 8-недельного воркшопа по созданию цифровых персонажей.
+Форк NetTyan, адаптированный под образовательный контекст (Zoom-лекции, RAG по курсу, конспектирование).
 
-## 1. Scope и приоритеты
+- **Платформа:** ИТМО AI Talent Hub / PersonaLab
+- **Трек ВКР:** Образовательный
 
-### MVP (обязательно к защите)
+## Быстрый старт
 
-| Компонент | Описание | Статус |
-|-----------|----------|--------|
-| Голосовое взаимодействие | Wake word → STT → LLM → TTS → голосовой ответ через Zoom | Не начато |
-| RAG по материалам курса | Поиск по лекционным материалам, ответы на вопросы | Не начато |
-| Конспектирование | Постфактум-суммаризация лекций из STT-транскрипта | Не начато |
-| Live2D аватар | Уникальный образ + эмоции + lipsync в Zoom | Не начато |
-| Уникальный голос | FishTTS с клонированным голосом | Не начато |
-| Сбор метрик | Логи взаимодействий для валидации ВКР | Не начато |
-
-### Nice-to-have (после MVP)
-
-| Компонент | Описание |
-|-----------|----------|
-| Minecraft-мониторинг | Доступ к событиям на сервере студентов |
-| Web search | Ответы на вопросы вне курса |
-| Diarization | Различение голосов студентов |
-| Мульти-эмоциональная модель | Расширенный набор реакций |
-
----
-
-## 2. Архитектура системы
-
-### 2.1 Общая схема
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                     ZOOM CONFERENCE                      │
-│  ┌──────────┐    ┌──────────────┐    ┌───────────────┐  │
-│  │ Лектор   │    │  Студенты    │    │  Агент        │  │
-│  │ (аудио)  │    │  (аудио+чат) │    │  (cam+mic)    │  │
-│  └────┬─────┘    └──────┬───────┘    └───────▲───────┘  │
-│       │                 │                    │           │
-└───────┼─────────────────┼────────────────────┼───────────┘
-        │                 │                    │
-   VB-Cable #1       VB-Cable #1          VB-Cable #2 (out)
-   (Zoom audio)      (Zoom audio)         + Virtual Cam
-        │                 │                    │
-        ▼                 ▼                    │
-┌───────────────────────────────────────────────────────────┐
-│                    AGENT SYSTEM (localhost)                │
-│                                                           │
-│  ┌─────────────┐    ┌──────────────┐    ┌──────────────┐ │
-│  │ STT Process │    │ Wake Word    │    │ TTS Process  │ │
-│  │ (Whisper)   │───▶│ Detector     │    │ (FishTTS)    │ │
-│  │ CPU/GPU     │    └──────┬───────┘    └──────▲───────┘ │
-│  └──────┬──────┘           │                   │         │
-│         │            ┌─────▼─────┐       ┌─────┴───────┐ │
-│         │            │ CtxHandler│       │ Emotion +   │ │
-│         │            │ (shared   │       │ Audio Route │ │
-│         │            │  state)   │       └──────▲──────┘ │
-│         │            └─────┬─────┘              │        │
-│         │                  │               ┌────┴──────┐ │
-│         ▼                  ▼               │           │ │
-│  ┌──────────────┐   ┌──────────────┐  ┌───┴────────┐  │ │
-│  │ Transcript   │   │ CoreAgent    │  │ VTube      │  │ │
-│  │ Buffer       │   │ (LLM +      │  │ Studio     │  │ │
-│  │ (lecture)    │   │  RAG +       │  │ (Live2D)   │  │ │
-│  └──────┬───────┘   │  Tools)      │  └────────────┘  │ │
-│         │           └──────────────┘                   │ │
-│         ▼                                              │ │
-│  ┌──────────────┐   ┌──────────────┐                   │ │
-│  │ Post-lecture  │   │ RAG Index   │                   │ │
-│  │ Summarizer   │──▶│ (FAISS +    │                   │ │
-│  │ (LLM)        │   │  course     │                   │ │
-│  └───────────────┘   │  materials) │                   │ │
-│                      └─────────────┘                   │ │
-│                                                        │ │
-│  ┌──────────────┐   ┌──────────────┐                   │ │
-│  │ Metrics      │   │ Gradio UI   │                   │ │
-│  │ Logger       │   │ (control    │                   │ │
-│  │ (SQLite)     │   │  panel)     │                   │ │
-│  └──────────────┘   └──────────────┘                   │ │
-└────────────────────────────────────────────────────────────┘
+```bash
+cp .env.example .env
+# Заполнить API ключи и настройки аудио в .env
+pip install -e .
+python src/main.py
 ```
 
-### 2.2 Процессная модель (наследуется от NetTyan)
-
-Система построена на `multiprocessing.Manager` для shared state между процессами.
-
-| Процесс | Источник (NetTyan) | Модификация |
-|---------|-------------------|-------------|
-| STT Process | `run_voice_processor` | Переключить audio device на VB-Cable из Zoom |
-| TTS Process | `simple_tts_handler` | Без изменений, FishTTS + VTube Studio lipsync |
-| Agent Process | `CoreAgent` | Новый prompt, новый tool bank, RAG по курсу |
-| HUD Layer | `HudLayerHandler` | Опционально — субтитры в OBS/Zoom |
-| Filter Process | `ctx_filter_handler` | Упростить — образовательный контекст мягче |
-| Gradio UI | `main.py` demo | Добавить панель конспектов и метрик |
-| **НОВЫЙ:** Transcript Buffer | — | Копит STT-вывод для постфактум-суммаризации |
-| **НОВЫЙ:** Metrics Logger | — | Пишет все взаимодействия в SQLite |
-
-### 2.3 Потоки данных
-
-**Поток A: Лекция → Конспект (фоновый)**
-```
-Zoom audio → VB-Cable #1 → STT (Whisper) → Transcript Buffer
-                                                    │
-                                          [после лекции]
-                                                    ▼
-                                          LLM суммаризация → RAG index update
-```
-
-**Поток B: Вопрос студента → Ответ агента (интерактивный)**
-```
-Студент говорит wake word → STT детектирует → Wake Word Detector
-    │
-    ▼
-CtxHandler.add_message() → CoreAgent.step()
-    │
-    ▼
-construct_prompt_messages() ← RAG query (материалы курса + конспекты)
-    │
-    ▼
-LLM inference → парсинг ответа + *emotion*
-    │
-    ├──▶ tts_queue → FishTTS → VB-Cable #2 → Zoom mic
-    └──▶ VTube Studio → эмоция на аватаре → Virtual Camera → Zoom camera
-```
-
----
-
-## 3. Компоненты: детальная спецификация
-
-### 3.1 STT + Wake Word Detection
-
-**Whisper конфигурация:**
-- Модель: `faster-whisper` `large-v3-turbo` (русский)
-- Device: CPU (оставляем GPU для FishTTS)
-- Fallback: `small` модель если CPU не тянет latency
-
-**Wake Word система:**
-- Не классический wake word engine (Porcupine/Snowboy) — они не поддерживают русские фразы.
-- Реализация: keyword spotting на уровне STT-транскрипта.
-- Trigger phrases (настраиваемый список в YAML):
-
-```yaml
-wake_words:
-  exact:
-    - "профессор подскажи"
-    - "профессор скажи"
-    - "агент ответь"
-    - "эй профессор"
-  prefix:
-    - "профессор,"  # всё после запятой = вопрос
-    - "агент,"
-  name:
-    - "Имя_персонажа"  # точное имя как trigger
-```
-
-- Фильтрация ложных срабатываний: слово "профессор" в контексте лекции (лектор говорит "профессор Иванов доказал...") НЕ триггерит — нужна комбинация с глаголом обращения или имя персонажа.
-- Окно захвата: после детекции wake word, следующие 15 секунд аудио считаются вопросом.
-
-**Speaker diarization (nice-to-have):**
-- `pyannote.audio` для разделения спикеров
-- Позволяет отличать голос лектора от студентов
-- GPU-зависимый — отложить до стабилизации MVP
-
-### 3.2 LLM
-
-**Основной:** Локальная модель через LM Studio или Ollama
-- Формат: OpenAI-compatible API на `localhost:22227`
-- Модели-кандидаты для 4070 12GB:
-  - `Qwen2.5-14B-Instruct-Q4_K_M` — хороший русский, влезает в 12GB
-  - `gemma-2-9b-it-Q5_K_M` — компактнее, быстрее
-- Конфигурация через `.env` (LiteLLM синтаксис, как в NetTyan)
-
-**Резервный:** Claude API (подписка)
-- Для: сложных вопросов, демонстрации, сбора данных "после"
-- Переключение: через `CORE_LLM_MODEL_NAME` в .env или runtime toggle в Gradio UI
-
-**Для суммаризации:** Та же локальная модель, batch mode после лекции.
-
-### 3.3 RAG
-
-**Базируется на:** `agent/rag.py` из NetTyan (FAISS + embeddings).
-
-**Источники данных:**
-1. **Материалы курса** (статические) — получить пакет от автора курса, проиндексировать один раз.
-2. **Конспекты лекций** (инкрементальные) — после каждой лекции добавляются в индекс.
-3. **Документация PersonaLab** — README, INTENSIVE_PLAN, инструкции.
-
-**Embeddings:**
-- Модель: `bge-m3` через LM Studio (уже есть в .env NetTyan)
-- Или: `intfloat/multilingual-e5-small` — легче, хорошо для русского
-
-**Индекс:**
-- FAISS (уже в зависимостях NetTyan: `faiss-cpu`)
-- Персистентный: сохранение на диск после каждого обновления
-- Chunk size: 512 токенов, overlap 64
-
-### 3.4 TTS + Голос
-
-**FishTTS:**
-- Уже интегрирован в NetTyan (`src/tts/fish/fish_gr.py`)
-- Подключение через Gradio Client к FishTTS server
-- Server: локальный на 4070 или удалённый `tts.nettyan.ru`
-
-**Клонирование голоса:**
-- Записать 30-60 секунд твоего голоса в тихом помещении
-- Формат: WAV 48kHz 16bit mono
-- Положить в `resources/Audio/refs/`
-- Обновить `refs_manifest.yml`:
-
-```yaml
-neutral: "professor_neutral"
-happy: "professor_happy"
-sad: "professor_sad"
-# минимум 3 эмоции для начала
-```
-
-**Альтернативы FishTTS (если качество не устроит):**
-- `GPT-SoVITS` — лучшее качество клонирования для русского, но тяжелее
-- `CosyVoice` (Alibaba) — хороший русский, zero-shot клонирование
-- `Piper TTS` — быстрый, но без эмоций
-
-### 3.5 Live2D + Визуал
-
-**Переиспользуется из NetTyan:**
-- `src/live2d/vtube_studio.py` — WebSocket API VTube Studio
-- `src/live2d/eye_rotater.py` — анимация глаз
-- Emotion → expression mapping
-- Lipsync через виртуальный кабель
-
-**Аватар:**
-- Нужно нарисовать или найти на VRoid Hub / Live2D Steam Workshop
-- Концепт: мужской персонаж (преподаватель), спокойный, интеллигентный
-- Стиль: полуреалистичный аниме или стилизованный — решать тебе/знакомому художнику
-- Минимальные blendshapes: рот (lipsync), глаза, брови (эмоции)
-
-### 3.6 Zoom-интеграция
-
-**Вход (Zoom → Агент):**
-```
-Zoom Desktop → Settings → Audio → Speaker → VB-Cable Input
-                                              │
-                                    VB-Cable Output → STT Process
-```
-
-**Выход (Агент → Zoom):**
-```
-FishTTS → VB-Cable #2 Input
-                │
-Zoom Desktop → Settings → Audio → Microphone → VB-Cable #2 Output
-VTube Studio → Virtual Camera → Zoom → Settings → Video → VTubeStudioCam
-```
-
-**Требование:** Два VB-Cable (или один VB-Cable + один VB-Cable-B). Один для входа, один для выхода. Иначе получишь feedback loop.
-
-### 3.7 Конспектирование (постфактум)
-
-**Pipeline:**
-1. Во время лекции: STT непрерывно транскрибирует → текст копится в `transcript_buffer.txt`
-2. После лекции (триггер: кнопка в Gradio UI или автоматически по таймауту тишины):
-   - Транскрипт разбивается на чанки по 3000 токенов
-   - Каждый чанк суммаризируется LLM
-   - Суммаризации объединяются в финальный конспект
-   - Конспект индексируется в RAG
-
-**Prompt для суммаризации:**
-```
-Ты — конспектист лекции по созданию ИИ-персонажей.
-Выдели из фрагмента лекции:
-1. Ключевые концепции и определения
-2. Практические инструкции и команды
-3. Упомянутые инструменты и технологии
-4. Задания студентам
-Формат: структурированный конспект, русский язык.
-```
-
-### 3.8 Метрики для ВКР
-
-**Что собирать (SQLite):**
-
-```sql
-CREATE TABLE interactions (
-    id INTEGER PRIMARY KEY,
-    timestamp DATETIME,
-    lecture_week INTEGER,
-    student_query TEXT,          -- вопрос студента (STT)
-    agent_response TEXT,         -- ответ агента
-    response_time_ms INTEGER,   -- латентность
-    rag_sources TEXT,            -- какие документы использовал RAG
-    emotion TEXT,                -- эмоция ответа
-    was_helpful INTEGER          -- если студент дал feedback
-);
-
-CREATE TABLE lecture_summaries (
-    id INTEGER PRIMARY KEY,
-    lecture_week INTEGER,
-    date DATE,
-    transcript_length INTEGER,
-    summary TEXT,
-    topics_covered TEXT
-);
-
-CREATE TABLE system_metrics (
-    id INTEGER PRIMARY KEY,
-    timestamp DATETIME,
-    stt_latency_ms INTEGER,
-    llm_latency_ms INTEGER,
-    tts_latency_ms INTEGER,
-    gpu_util_percent REAL,
-    ram_usage_mb REAL
-);
-```
-
-**Для валидации ВКР (образовательный трек):**
-- **Baseline:** опросник студентов ДО внедрения агента (удовлетворённость, скорость получения ответов, понимание материала)
-- **After:** тот же опросник ПОСЛЕ нескольких недель с агентом
-- **Количественные метрики:** число вопросов к агенту по неделям, время ответа, процент вопросов на которые агент нашёл ответ в RAG vs не нашёл
-- **Качественные:** экспертная оценка конспектов, отзывы студентов
-
----
-
-## 4. Personalities.yml — концепт персонажа
-
-**TODO: придумать имя и образ. Заготовка структуры:**
-
-```yaml
-professor_default: |
-  Ты — [ИМЯ], ИИ-ассистент преподавателя курса по созданию цифровых персонажей.
-  
-  ## Твоя идентичность
-  - Роль: помощник-преподаватель, наставник
-  - Голос: спокойный, уверенный, с тёплым баритоном
-  - Манера: объясняет сложное простым языком, поощряет вопросы
-  - Юмор: уместный, интеллигентный, без пошлости
-  - Эмоции: сдержанные, но искренние
-  
-  ## Знания
-  - Курс PersonaLab: создание ИИ-персонажей, LLM, TTS, Live2D, RAG
-  - Проект NetTyan: архитектура, компоненты, настройка
-  - Minecraft: сервер, моды, AutoClef
-  - Общие вопросы ИИ: отвечаешь, но направляешь к специализированным ресурсам
-  
-  ## Правила
-  - Отвечай на русском
-  - Если не знаешь ответа — честно скажи и предложи спросить лектора
-  - Не повторяйся
-  - Будь кратким в голосовых ответах (2-4 предложения), подробным в текстовых
-  - Ты МУЖСКОГО пола, используй мужские формы глаголов
-  
-  ## Формат ответа
-  - Текст ответа *emotion*
-  - Доступные эмоции: neutral, happy, thoughtful, encouraging
-```
-
----
-
-## 5. Файловая структура проекта
+## Структура проекта
 
 ```
-ai-professor/
-├── .env                          # копия из NetTyan, адаптированная
-├── src/
-│   ├── main.py                   # точка входа (форк NetTyan main.py)
-│   ├── agent/
-│   │   ├── core_agent.py         # из NetTyan, модифицированный
-│   │   ├── rag.py                # из NetTyan, новые данные
-│   │   ├── prompt_generation/    # из NetTyan, новые промпты
-│   │   └── tools/                # новый tool bank
-│   │       ├── tools.py
-│   │       └── tools_config.py
-│   ├── data_flow/
-│   │   ├── ctx_handler.py        # из NetTyan без изменений
-│   │   └── ctx_host.py           # из NetTyan без изменений
-│   ├── data_schema/              # из NetTyan без изменений
-│   ├── lecture/                   # НОВЫЙ модуль
-│   │   ├── transcript_buffer.py  # накопитель транскрипта
-│   │   ├── summarizer.py         # постфактум суммаризация
-│   │   └── wake_word.py          # детекция обращений к агенту
-│   ├── metrics/                  # НОВЫЙ модуль
-│   │   └── logger.py             # SQLite логирование
-│   ├── live2d/                   # из NetTyan без изменений
-│   ├── tts/                      # из NetTyan без изменений
-│   └── data_collectors/
-│       └── stt/                  # из NetTyan, переконфигурированный
-├── resources/
-│   ├── Prompts/
-│   │   ├── personalities.yml     # НОВЫЙ — персонаж преподавателя
-│   │   ├── instructions.yml      # адаптированный
-│   │   └── abilities.yml         # адаптированный
-│   ├── Audio/refs/               # сэмплы твоего голоса
-│   └── RAG/
-│       ├── course_materials/     # PDF/MD от автора курса
-│       └── lecture_summaries/    # генерируемые конспекты
-├── docker/                       # из NetTyan
-├── data/
-│   ├── metrics.db                # SQLite с метриками
-│   ├── faiss_index/              # персистентный RAG индекс
-│   └── transcripts/              # сырые транскрипты лекций
-└── tests/
+src/
+  main.py                  # точка входа (Gradio UI + multiprocessing)
+  agent/                   # CoreAgent, RAG, промпты, инструменты
+  lecture/                 # НОВЫЕ модули: wake_word, transcript_buffer, summarizer
+  metrics/                 # НОВЫЙ: SQLite логирование взаимодействий
+  data_flow/               # ctx_handler, ctx_host (из NetTyan)
+  data_collectors/stt/     # STT через faster-whisper
+  live2d/                  # VTube Studio интеграция
+  tts/                     # FishTTS
+resources/
+  Prompts/                 # personalities, instructions, abilities
+  Customization/           # wake_words.yml, tool_bank_config и др.
+  Audio/refs/              # голосовые сэмплы для клонирования
+  RAG/                     # course_materials/, lecture_summaries/
+data/
+  metrics.db               # SQLite (автосоздаётся)
+  transcripts/             # сырые транскрипты лекций
+  faiss_index/             # персистентный RAG-индекс
 ```
 
----
+## Архитектура
 
-## 6. План реализации
+Система на `multiprocessing.Manager` (shared state между процессами):
 
-### Неделя 1 (СЕЙЧАС): Минимальный работающий прототип
+- **STT Process** — faster-whisper, слушает Zoom через VB-Cable #1
+- **Wake Word Detector** — keyword spotting на STT-транскрипте (русские фразы)
+- **CoreAgent** — LLM + RAG по материалам курса
+- **TTS Process** — FishTTS, выход через VB-Cable #2 в Zoom
+- **Live2D** — VTube Studio, эмоции + lipsync → Virtual Camera → Zoom
+- **Transcript Buffer** — копит STT для постфактум-суммаризации
+- **Metrics Logger** — SQLite, все взаимодействия для ВКР
 
-**День 1-2:**
-- [ ] Форкнуть NetTyan, вычистить Twitch/YouTube/Minecraft специфику
-- [ ] Настроить .env под локальную конфигурацию
-- [ ] Поднять LM Studio с Qwen2.5-14B + embeddings
-- [ ] Проверить что CoreAgent запускается и отвечает через Gradio
+### Потоки данных
 
-**День 3-4:**
-- [ ] Настроить два VB-Cable для Zoom
-- [ ] Подключить STT к VB-Cable #1 (Zoom audio out)
-- [ ] Подключить TTS к VB-Cable #2 (Zoom mic in)
-- [ ] Убедиться что агент слышит и говорит в Zoom
+**Фоновый:** Zoom audio → STT → Transcript Buffer → [после лекции] → LLM суммаризация → RAG
+**Интерактивный:** Wake word → CtxHandler → CoreAgent (RAG) → TTS + Live2D → Zoom
 
-**День 5-7:**
-- [ ] Записать голосовые сэмплы, настроить FishTTS клонирование
-- [ ] Написать wake_word.py (keyword detection на STT-транскрипте)
-- [ ] Найти временную Live2D модель, подключить VTube Studio → Zoom virtual cam
-- [ ] Первый запуск на реальной лекции (silent mode — только логирование)
+## Конфигурация
 
-### Неделя 2: RAG + Конспекты
+- `.env` — модели, API ключи, аудио-устройства (LiteLLM синтаксис)
+- `resources/Customization/wake_words.yml` — триггер-фразы для обращения к агенту
+- `resources/Prompts/personalities_professor.yml` — персонаж преподавателя
 
-- [ ] Получить материалы курса от автора
-- [ ] Проиндексировать в FAISS
-- [ ] Написать transcript_buffer.py и summarizer.py
-- [ ] Первый тест конспектирования на записи предыдущей лекции
-- [ ] Развернуть метрики (SQLite logger)
-- [ ] **Провести baseline-опрос студентов**
+## LLM
 
-### Неделя 3: Персонаж + полировка
+- **Основной:** локальная модель через LM Studio/Ollama (`localhost:22227`) или Claude/Mistral API
+- **Embeddings:** `bge-m3` через LM Studio
+- Переключение модели: `CORE_LLM_MODEL_NAME` в `.env`
 
-- [ ] Финализировать имя и образ
-- [ ] Заказать/нарисовать Live2D модель (или адаптировать существующую)
-- [ ] Настроить personalities.yml под финальный персонаж
-- [ ] Отладить emotion mapping для преподавательского контекста
-- [ ] Первый полноценный запуск на лекции с взаимодействием
+## Аудио маршрутизация (Zoom)
 
-### Неделя 4-8: Итерации + сбор данных
+Требуется два VB-Cable:
+- VB-Cable #1: Zoom speaker → STT (вход)
+- VB-Cable #2: FishTTS → Zoom mic (выход)
 
-- [ ] Еженедельные улучшения по обратной связи
-- [ ] Наращивание RAG-базы конспектами
-- [ ] Minecraft-мониторинг (если останется время)
-- [ ] Финальный опрос студентов
-- [ ] Написание текста ВКР
+## Правила разработки
 
----
-
-## 7. Аппаратные требования
-
-| Ресурс | Использование | Оценка |
-|--------|--------------|--------|
-| GPU VRAM (4070, 12GB) | FishTTS inference | ~4-6 GB |
-| GPU VRAM | LM Studio (Qwen 14B Q4) | ~8-10 GB |
-| **Конфликт:** | TTS + LLM одновременно не влезут | — |
-| **Решение:** | LLM на CPU через llama.cpp ИЛИ LLM через API (Claude/Mistral) | — |
-| CPU | Whisper large-v3-turbo (STT) | 1-2 ядра |
-| RAM | Всё вместе | ~16 GB минимум |
-| Диск | Модели + данные | ~30 GB |
-
-**Реалистичная конфигурация для 4070:**
-- GPU: FishTTS only
-- LLM: Claude API (подписка) или Mistral API (бесплатно)
-- STT: faster-whisper на CPU, модель `small` или `medium`
-- Это даёт лучшее качество ответов и стабильную работу
-
----
-
-## 8. Открытые вопросы
-
-1. **Имя персонажа** — нужно придумать до начала Недели 3
-2. **Live2D модель** — рисовать самому, просить знакомых, или Steam Workshop
-3. **Конкретная локальная LLM** — нужен бенчмарк на типовых вопросах курса
-4. **Формат обратной связи** — как студент говорит "спасибо, помогло" / "не помогло"
-5. **Запись лекции для Ботова** — посмотреть, уточнить требования к предзащите
+- Язык кода: Python 3.11+
+- Код и комментарии: на английском
+- Промпты и персонаж: на русском
+- Конфиги: YAML
+- Метрики: SQLite
+- Не трогать модули NetTyan без необходимости (data_flow, data_schema, live2d, tts)
+- Новый функционал — в `src/lecture/` и `src/metrics/`
