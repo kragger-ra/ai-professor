@@ -74,6 +74,9 @@ _log_timing("Front imported")
 from tts.simple_tts_handler import simple_tts_handler  # 0.7s to import
 
 _log_timing("TTS imported")
+from lecture.integration import LectureManager
+
+_log_timing("Lecture module imported")
 _log_timing("All imports done")  # 6.2s total
 
 ctx_swarm: CtxSwarmType = CTX_SWARM_EMPTY
@@ -82,6 +85,7 @@ ctx_chat = []
 ctx = None
 Supervisor = None
 processes = []
+lecture_manager: LectureManager = None
 
 
 def main_agent_need_starting():
@@ -489,6 +493,63 @@ with demo:
 
                 chat_queue_input.submit(fn=chat_queue_add, inputs=[chat_queue_input])
 
+    with gr.Tab(label="Lecture"):
+        with gr.Row():
+            lecture_start_btn = gr.Button("Start Lecture", variant="primary")
+            lecture_stop_btn = gr.Button("Stop & Summarize", variant="stop")
+        lecture_status = gr.Textbox(label="Status", value="Not recording", interactive=False)
+        lecture_segments = gr.Number(label="Segments recorded", value=0, interactive=False)
+        lecture_summary_box = gr.Textbox(
+            label="Last summary", lines=12, interactive=False
+        )
+
+        def _lecture_start():
+            if lecture_manager is None:
+                return "LectureManager not initialized"
+            return lecture_manager.start_lecture()
+
+        def _lecture_stop():
+            if lecture_manager is None:
+                return "LectureManager not initialized"
+            return lecture_manager.stop_lecture()
+
+        def _lecture_tick():
+            if lecture_manager is None:
+                return "Not initialized", 0, ""
+            status = "Recording..." if lecture_manager.is_recording else "Stopped"
+            return status, lecture_manager.segment_count, lecture_manager.last_summary
+
+        lecture_start_btn.click(fn=_lecture_start, outputs=[lecture_status])
+        lecture_stop_btn.click(fn=_lecture_stop, outputs=[lecture_summary_box])
+
+        timer_lecture = gr.Timer(value=5)
+        timer_lecture.tick(
+            fn=_lecture_tick,
+            outputs=[lecture_status, lecture_segments, lecture_summary_box],
+            queue=False,
+        )
+
+    with gr.Tab(label="Metrics"):
+        metrics_weekly = gr.Dataframe(label="Weekly stats")
+        metrics_recent = gr.Dataframe(label="Recent interactions (last 10)")
+
+        def _metrics_refresh():
+            if lecture_manager is None:
+                return pd.DataFrame(), pd.DataFrame()
+            weekly = lecture_manager.metrics.get_weekly_stats()
+            recent = lecture_manager.metrics.get_recent_interactions(limit=10)
+            return pd.DataFrame(weekly), pd.DataFrame(recent)
+
+        metrics_refresh_btn = gr.Button("Refresh metrics")
+        metrics_refresh_btn.click(fn=_metrics_refresh, outputs=[metrics_weekly, metrics_recent])
+
+        timer_metrics = gr.Timer(value=15)
+        timer_metrics.tick(
+            fn=_metrics_refresh,
+            outputs=[metrics_weekly, metrics_recent],
+            queue=False,
+        )
+
     with gr.Accordion("System Stats", open=False):
         with gr.Row():
             llm_time = gr.Number(
@@ -646,7 +707,7 @@ _log_timing("All pre-main functions defined")
 
 
 def main():
-    global demo, ctx_chat, ctx_swarm, ctx_handler, ctx, processes, manager, Supervisor, SELF_NAME, processes
+    global demo, ctx_chat, ctx_swarm, ctx_handler, ctx, processes, manager, Supervisor, SELF_NAME, processes, lecture_manager
 
     _log_timing("=== MAIN FUNCTION STARTED ===")
     args = parse_args()
@@ -683,6 +744,12 @@ def main():
             ]
         )
     ctx_handler = CtxHandler(ctx_swarm)
+
+    lecture_manager = LectureManager(ctx_swarm)
+    # Store in ctx_swarm so CoreAgent can access it
+    ctx_swarm["env"]["lecture_manager"] = lecture_manager
+    _log_timing("LectureManager initialized")
+
     # ctx_swarm["fx_queue"].put("starting")
     _log_timing("Starting MineBridgeProc process")
     MineBridgeProc = Process(

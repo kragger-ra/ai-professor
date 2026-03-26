@@ -141,23 +141,32 @@ class CoreAgent(BaseAgent):
             # Get response from LLM
             smart_event_waiter = SmartEventWaiter(ctx_handler=self.ctx_handler)
             self.ctx_swarm["fx_queue"].put("thinking")
+            t_start = time.time()
             response = execute_tool_query(
                 messages,
                 should_interrupt=smart_event_waiter.check,
                 response_starting=response_starting,
             )
+            llm_elapsed_ms = int((time.time() - t_start) * 1000)
             smart_event_waiter.shutdown()
-            # response = self.llm.invoke(messages)
-
-            # Save response to context
-            # self.handler.add_message({
-            #     "msg": response,
-            #     "user": "NetTyan",
-            #     "type": "chat",
-            #     "self": True
-            # })
 
             print(f"Agent response:\n---\n{response}\n---\n")
+
+            # Log interaction to metrics if LectureManager is available
+            lm = self.ctx_swarm["env"].get("lecture_manager")
+            if lm is not None and response:
+                # TODO: extract actual student query and emotion from context
+                last_query = ""
+                ctx_chat = self.ctx_handler.get_ctx_chat(dict_format=True, limit=1)
+                if ctx_chat:
+                    last_entry = ctx_chat[-1]
+                    if isinstance(last_entry, dict):
+                        last_query = last_entry.get("msg", "")
+                lm.log_interaction(
+                    query=last_query,
+                    response=str(response),
+                    response_time_ms=llm_elapsed_ms,
+                )
             # print(f"Messages state AFTER response")
             # print_messages(messages)
 
