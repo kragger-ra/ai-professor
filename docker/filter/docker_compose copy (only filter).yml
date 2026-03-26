@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  filter:
+    build:
+      context: ./feature_filter
+      dockerfile: Dockerfile
+    ports:
+      - "22230:22230"
+    volumes:
+      - ./models:/models
+      - ./feature_filter:/app
+    environment:
+      - PYTHONPATH=/app 

@@ -1,0 +1,10 @@
+vote:
+  cooldown: 1.0
+vote_finish:
+  cooldown: 100.0
+  cooldown_id: vote_start
+vote_start:
+  cooldown: 100.0
+  cooldown_id: vote_finish
+vote_register:
+  cooldown: 1.0

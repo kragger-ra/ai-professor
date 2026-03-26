@@ -1,0 +1,8 @@
+word,category,weight,label
+apple,fruit,0.5,healthy
+banana,fruit,0.3,healthy
+carrot,vegetable,0.5,healthy
+donut,dessert,0.2,unhealthy
+eggplant,vegetable,0.8,healthy
+fig,dessert,0.1,healthy
+grape,fruit,0.3,healthy

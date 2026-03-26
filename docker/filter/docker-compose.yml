@@ -1,0 +1,27 @@
+services:
+  filter:
+    build:
+      context: ./feature_filter
+      dockerfile: Dockerfile
+    ports:
+      - "22230:22230"
+    volumes:
+      - ./models:/models
+      - ./feature_filter:/app
+    environment:
+      - PYTHONPATH=/app
+
+  fishtts-speech-nt:
+    image: fishaudio/fish-speech:v1.5.1-dev
+    ports:
+      - "22231:7860"
+    volumes:
+      - ./fish-tts:/app
+    command: "python -m tools.run_webui --compile ${SPEECH_CUDA_DEVICE_ARG}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

@@ -1,0 +1,8 @@
+category,coefficient,label
+fruit,0.5,healthy
+vegetable,0.3,beneficial
+dessert,0.2,unhealthy
+grain,0.4,healthy
+meat,0.6,protein-rich
+dairy,0.5,nutritious
+snack,0.3,light

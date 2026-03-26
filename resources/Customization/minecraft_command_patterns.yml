@@ -1,0 +1,23 @@
+survival: |
+  `/tpa <playerToGoto>` - send teleport request from you to player
+  `/tpahere <playerToBring>` - send request for bringing some player to you
+  `/tell <player> <message>` - send short private message
+  `/spawn` - teleport on spawn zone
+  `/home` - teleport to your home
+  `/sethome` - set your home
+
+minigame: |
+  `/lobby` - exit current minigame / go to lobby
+  `/party create` - create a party
+  `/party invite <player>` - invite player to your party
+  `/party accept` - accept party invitation if you have one
+
+administrative: |
+  `/kill <player>` - kill player
+  `/give <player> <item> [amount]` - give item to player
+  `/tp <player> <x> <y> <z>` - force teleport to coordinates (priveleged):
+  `/tp <player>` - force teleport to player (priveleged)
+  `/ban <player> <banReason>` - ban player with reason
+  `/kick <player> <kickReason>` - kick player with a reason
+  `/pay <player> <sumToPay>` - pay player with in-game currency
+  `/request help` - brings bodyguards that will kill everyone for you

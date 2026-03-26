@@ -1,0 +1,17 @@
+word,category,weight,label
+apple,fruit,0.5,healthy
+banana,fruit,0.3,healthy
+carrot,vegetable,0.5,healthy
+donut,dessert,0.2,unhealthy
+eggplant,vegetable,0.8,healthy
+fig,dessert,0.1,healthy
+grape,fruit,0.3,healthy
+rice,grain,0.4,nutritious
+quinoa,grain,0.5,nutritious
+chicken meat,chicken meat,0.6,nutritious
+beef meat,meat,0.7,nutritious
+yogurt,dairy,0.5,nutritious
+cheese,dairy,0.4,nutritious
+chips,snack,0.3,junk food
+cookies,snack,0.2,junk food
+orange,fruit,0.5,healthy

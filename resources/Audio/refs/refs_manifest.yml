@@ -1,0 +1,13 @@
+# neutral, happy, sad, angry, scared, disgusted, sarcastic
+
+yandere:
+  wav: worshiper
+  text: Чего желает мой повелитель?
+
+happy:
+  wav: goblin
+  text: Никому не двигаться, у меня бомба!
+
+neutral:
+  wav: Keltuzad
+  text: Эта рогатая штуковина на голове, я от неё скоро с ума сойду!

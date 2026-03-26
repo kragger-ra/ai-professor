@@ -1,0 +1,22 @@
+minecraft_command:
+  administrative:
+  - kill <player>
+  - give <player> <item> [amount]
+  - tp <player> <x> <y> <z>
+  - tp <player> <player>
+  - ban <player> [reason]
+  - unban <player>
+  - kick <player> [reason]
+  - mute <player> [reason]
+  survival:
+  - tpa <player>: teleport to player with request
+  - tpaccept
+  - tpdeny
+  - sethome
+  - home
+  - spawn
+  mc.musteryworld.net:
+  - party create
+  - party invite <player>
+  - party leave
+  - hub

@@ -1,0 +1,46 @@
+all:
+  description: "server with a lot of features, minigames and survival and you are an admin!"
+  commands:
+  - survival
+  - minigame
+  - administrative
+  actions:
+  - base
+  - control
+  - survival
+  - minigame
+default:
+  description: "random server with no pre-defined information, be ready to check commands are working"
+  commands:
+  - survival
+  - administrative
+  - minigame
+  actions:
+  - base
+  - control
+  - survival
+  - minigame
+mc.musteryworld.net:
+  description: |
+    Minigames: skywars and murdermystery.
+    Party system. Non-moderated server.
+    Big online, very aggressive players and cheaters everywhere.
+    Players may not pay attention to you.
+  actions_description: |
+    You CANNOT build or destroy blocks here!
+  commands:
+  - minigame
+  actions:
+  - base
+  - control
+  - minigame
+xai.sytes.net:
+  description: |
+    Your own vanilla survival server with administrative commands.
+    Very low / empty online always.
+  actions:
+  - base
+  - survival
+  commands:
+  - survival
+  - administrative

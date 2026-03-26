@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  nt-endpoint:
+    build: .
+    container_name: nt-endpoint
+    image: nt-endpoint
+    ports:
+      - "22229:22229"
+      - "7860:7860"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

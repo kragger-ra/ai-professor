@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Информация о системе{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="/static/css/votes.css">
+{% endblock %}
+
+{% block content %}
+<div id="vote-container">
+    <p id="no-votes"></p>
+</div>
+{% endblock %}
+
+{% block body_scripts %}
+<script src="/static/js/votes.js"></script>
+{% endblock %}

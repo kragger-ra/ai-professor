@@ -1,0 +1,28 @@
+.OutlineText {
+    text-shadow:
+    /* Outline 1 черный */
+    -1px -1px 0 #000000,
+    1px -1px 0 #000000,
+    -1px 1px 0 #000000,
+    1px 1px 0 #000000,  
+    -2px 0 0 #000000,
+    2px 0 0 #000000,
+    0 2px 0 #000000,
+    0 -2px 0 #000000, 
+    /* Outline 2 розовый */
+    -2px -2px 0 #ff5cef,
+    2px -2px 0 #ff5cef,
+    -2px 2px 0 #ff5cef,
+    2px 2px 0 #ff5cef,  
+    -3px 0 0 #ff5cef,
+    3px 0 0 #ff5cef,
+    0 3px 0 #ff5cef,
+    0 -3px 0 #ff5cef;
+}
+
+#subtitles-container {
+    position: fixed;
+    bottom: 50px;
+    width: 100%;
+    text-align: center;
+}

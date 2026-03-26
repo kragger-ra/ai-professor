@@ -1,0 +1,2 @@
+mss==6.1.0
+opencv-python==4.10.0.84

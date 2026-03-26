@@ -1,0 +1,26 @@
+##################################################
+# LLM client Profiles                            #
+# Each profile includes settings for the model,  #
+# tags, and any additional parameters.           #
+##################################################
+
+saiga_nemo:
+  llm:
+    temperature: 0.0
+
+gemma:
+  llm:
+    top_p: 0.95
+    temperature: 1.0
+    # api_base
+    # api_key
+    # ...
+    # min_p = 0
+    # top_k = 0
+    # max_length = 512
+  tags:
+  - vision
+
+deepseek:
+  tags:
+  - thinking

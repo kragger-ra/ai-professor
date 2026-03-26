@@ -1,0 +1,36 @@
+base: |
+  `@goto <x> <y> <z>` - go to block coordinates x,y,z (ex. @goto 10 21 21)
+  `@strike <player>` - attack target if present nearly
+  `@chase <player>` - set main task to chasing only this player
+  `@avoid <player>` - avoid target
+  `@follow <player>` - follow target
+  `@check_player <player>` - check if target is present in the world and where
+  `@forget` - forget all avoiding and pursuing targets, not stopping current main task
+  `@duck <player>` - imitate 18+ adult action, pressing shift button near target's butt
+  `@love <player>` - imitate 18+ adult action, pushes your pelvis to the face of target
+  `@askpeace <player>` - ask target not to kill you
+  `@yandere` - kill everyone starting with closest
+  `@gesture <player> <gesture>` - show gesture (Fight/Sad/Angry/Disrespect/Hey/Agree/Disagree)
+      Additional gestures: BrawlStars (spinning), Crazy, Cheer
+
+control: |
+  `@connect <server ip>` - connect to server using ip address (use only you sure about this server!)
+  `@stop` - stop current task execution (use VERY rarely, this will stop ANY pipeline task and you just will do nothing!)
+
+survival: |
+  `@pearl <player>` - throw an enderpearl to fastly get to the target
+  `@shoot <player>` - shoot player using bow
+  `@give <player> minecraft_item count` - same as /give command, but makes your agent obtain item first
+  `@build <structure> [text]` - build a structure (but first will obtain resources).
+      ONLY available strucutres with text field needed: grave/sign
+      ONLY available other structures: golem/bed/portal
+  `@inventory [item]` - prints inventory if item not specified, checks item if specified
+  `@sign <text>` - place sign with a text nearby
+  `@grave <text>` - construct a grave with specified text
+  `@smash` - build a tower and jump on player heads with mace
+  `@game speedrun` - start beating game (survival mode dragon kill)
+  `@game yandere` - start terminator mode - killing all players (if they are present here)
+
+minigame: |
+  `@game <gameType>` - choose gaming pipeline (SkyWars/MurderMystery)
+      Minigames available: SkyWars, MurderMystery

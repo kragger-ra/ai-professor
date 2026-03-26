@@ -1,0 +1,116 @@
+core:
+  task: ляляля
+  tools:
+  - interrupt_voice
+  - interrupt_chat
+  - wait:
+    cooldown: 3
+  - minecraft_command:
+    cooldown: 5
+  - agent_action:
+    cooldown: 2
+    cooldown_id: agent_action
+
+# OLD STRUCTURE, REFORMAT / REMOVE
+commander:  # максимальный пример со всеми возможными полями
+  task: "Успешно развлекать аудиторию, вести интересный стрим, грамотно используя доступные ресурсы и инструменты."
+  tools:
+  - interrupt_chat
+  - interrupt_voice
+  - finish_vote
+  - start_vote
+  - add_votes
+  - many_say
+  - speak
+  - private_message
+  - generate_joke
+  - wait
+  prompt:  # общая структура промпта
+  - main  # главное описание, тулы, инструменты, задача, 
+  - slang_rag
+  - commander_few_shot  # 1 фью шот для роли написанный специально
+  - history_commander   # история прошлых ответов и ответов тулов если нужна
+  # структура: list [(input, output), ...]
+  # TODO: 3 примера + ВСЁ СТАРОЕ СУММАРИЗИРОВАТЬ
+  - input
+  input:
+  - eventlist  # состояние чата всё в целом и слова из рага с объяснением
+  - game_chat  # нераспарсенный чат с майнкрафта
+  - game_state  # игроки и расстояние, опасность игроков
+  - game_tasks  # состояние иерархического игрового агента
+  - game_thoughts # plan criticism summary игрового агента
+  output:
+  - thoughts  # plan criticism summary
+  - tools_return  # итоговый return тулов
+  - tools_explain  # добавить тул который объяснит ошибки в тулах если они были
+
+chooser:
+  task: "Посмотреть на работу разных планов в разных частях и выбрать наиболее приоритетный в данный момент"
+  tools:
+  - choose_agent
+  prompt:  # общая структура промпта
+  - main  # главное описание, тулы, инструменты, задача, 
+  - chooser_few_shot  # 1 фью шот для роли написанный специально
+  - history_chooser   # история прошлых ответов и ответов тулов если нужна
+  # структура: list [(input, output), ...]
+  # TODO: 3 примера + ВСЁ СТАРОЕ СУММАРИЗИРОВАТЬ
+  - input
+  input:
+  - chooser_thoughts  # plan criticism summary
+  - thoughts # plan criticism summary агента
+  - game_thoughts # plan criticism summary игрового агента
+  output:
+  - chooser_thoughts  # plan criticism summary
+  - tools_return  # итоговый return тулов
+  - tools_explain  # добавить тул который объяснит ошибки в тулах если они были
+
+
+private_messager:
+  task: "Поговорить лично с человеком вдумчиво не забывая о стриме и об общей ситуации, чтобы всем этот разговор был интересен и весел."
+  tools:
+  - comment
+  - private_message
+  - update_summary
+  prompt:  # общая структура промпта
+  - main  # главное описание, тулы, инструменты, задача, 
+  - chooser_few_shot  # 1 фью шот для роли написанный специально
+  - user_summary
+  - user_dialog_context   # история прошлых ответов и ответов тулов если нужна
+  - input
+  input:
+  - user_input
+  output:
+  - tools_return  # итоговый return тулов
+  - tools_explain  # добавить тул который объяснит ошибки в тулах если они были
+
+
+minecrafter:
+  task: "Принимать разумные и реальные решения в игре эффективно. Не выдумывать. Если в командах нету того, что хочется сделать - это нельзя сделать."
+  tools:
+  - mc_command
+  - mc_chat
+  - mc_follow
+  - mc_kill
+  - mc_shift
+  - mc_check
+  - mc_change_mode
+  - mc_exit
+  - mc_custom_task
+  - mc_give
+  - mc_info
+  - wait
+  prompt:
+  - main
+  - game_mode_description
+  - minecrafter_few_shot
+  - history_minecrafter
+  - input
+  input:
+  - thoughts  # plan criticism summary главного агента (супервизтора)
+  - game_chat  # нераспарсенный чат с майнкрафта
+  - game_state  # игроки и расстояние, опасность игроков
+  - game_tasks  # состояние иерархического игрового агента
+  output:
+  - game_thoughts  # plan criticism summary
+  - tools_return  # итоговый return тулов
+  - tools_explain  # добавить тул который объяснит ошибки в тулах если они были
