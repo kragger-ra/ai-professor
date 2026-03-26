@@ -1,0 +1,28 @@
+# Wake word configuration for AI Professor
+# Used by src/lecture/wake_word.py
+#
+# Types:
+#   exact   — full phrase must appear in STT segment
+#   prefix  — segment must START with this phrase, rest = question
+#   name    — character name; triggers only with address verbs nearby
+#             to avoid false positives ("профессор Иванов доказал...")
+
+wake_words:
+  exact:
+    - "профессор подскажи"
+    - "профессор скажи"
+    - "профессор расскажи"
+    - "профессор объясни"
+    - "агент ответь"
+    - "эй профессор"
+
+  prefix:
+    - "профессор,"
+    - "агент,"
+
+  name: []
+    # Uncomment and set the character name when finalized:
+    # - "имя_персонажа"
+
+  # How many seconds after wake word to capture as the question
+  capture_window_sec: 15
