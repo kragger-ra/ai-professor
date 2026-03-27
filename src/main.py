@@ -746,8 +746,6 @@ def main():
     ctx_handler = CtxHandler(ctx_swarm)
 
     lecture_manager = LectureManager(ctx_swarm)
-    # Store in ctx_swarm so CoreAgent can access it
-    ctx_swarm["env"]["lecture_manager"] = lecture_manager
     _log_timing("LectureManager initialized")
 
     # ctx_swarm["fx_queue"].put("starting")
@@ -903,6 +901,27 @@ def main():
         prevent_thread_lock=True,
     )
     _log_timing("Gradio interface launched")  # 5s!!
+
+    # Polling thread: drains interaction logs from shared state into LectureManager
+    def _interaction_poller():
+        while ctx_swarm["env"].get("actived", True):
+            try:
+                data = ctx_swarm["env"].get("last_interaction")
+                if data is not None:
+                    lecture_manager.log_interaction(
+                        query=data.get("query", ""),
+                        response=data.get("response", ""),
+                        response_time_ms=data.get("response_time_ms", 0),
+                        rag_sources=data.get("rag_sources"),
+                        emotion=data.get("emotion", "neutral"),
+                    )
+                    ctx_swarm["env"]["last_interaction"] = None
+            except Exception as e:
+                print(f"[interaction_poller] error: {e}")
+            time.sleep(2)
+
+    Thread(target=_interaction_poller, daemon=True).start()
+    _log_timing("Interaction poller thread started")
 
     print("== main.py CODEBLOCK AFTER GRADIO LAUNCH ==")
     # starting agent NOW
