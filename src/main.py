@@ -29,12 +29,15 @@ def _log_timing(msg: str):
     process_name = "main.py"
     if __name__ != "__main__":
         process_name += "/" + str(os.getpid())
-    print(f"[⏱️ {elapsed:7.3f}s] [{process_name}] {msg}")
+    print(f"[T {elapsed:7.3f}s] [{process_name}] {msg}")
 
 
 _log_timing("System imports done. Starting main import sequence")
 
-from data_collectors.donations_sio import donations_handler
+try:
+    from data_collectors.donations_sio import donations_handler
+except ImportError:
+    donations_handler = None
 
 # TODO untested
 # Configure logging - allow smolagents but disable others
@@ -762,12 +765,7 @@ def main():
         processes.append(Social_Proc)
         _log_timing("Social_Proc started")
     else:
-        try:
-            donations_handler(ctx_swarm)
-        except KeyboardInterrupt:
-            exit()
-        except Exception:
-            print("[!!!!main.py!!!!] error in donations handler")
+        pass  # offline mode: no social services, no donations
     DO_BLOCK = True
     _log_timing(
         f"Core model config: {os.getenv('CORE_LLM_MODEL_NAME')} @ {os.getenv('CORE_LLM_API_BASE')}"

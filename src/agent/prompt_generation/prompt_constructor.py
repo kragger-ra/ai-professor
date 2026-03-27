@@ -644,15 +644,14 @@ def construct_prompt_messages(
             )
 
     thinking_llm = get_secret("CORE_LLM_REASONNING") != "NONE"  # for deepseek
+    model_name = get_secret("CORE_LLM_MODEL_NAME") or ""
+    mistral_llm = "mistral" in model_name.lower()
 
     if unfinished_response:
-        if thinking_llm:
-            # unfinished_response = ""
+        if thinking_llm or mistral_llm:
+            # Mistral API does not support assistant prefill (last msg must be user/tool)
             response_starting = ""
             unfinished_response_message = ""
-            # unfinished_response_message = (
-            #     "<think>"  # DEFAULT_UNFINISHED_REPSONSE_THINKING
-            # )
         else:
             unfinished_response_message = unfinished_response + response_starting
         if unfinished_response_message:
