@@ -12,7 +12,7 @@ if __name__ == "__main__":
     )
 
 from data_schema.structure_templates import REPO_RESOURCE_PATH
-from utils.audio_utils import change_pitch_speed
+from utils.audio_utils import change_pitch_speed, post_process_tts
 from utils.prompt_helper import yaml_load
 
 client = "not_started"
@@ -133,25 +133,23 @@ def fish_tts(text: str, ref: str, ref_text: str = ""):
             text = text[:250] + ". Устала говорить, слишком длинный текст."
             print("[FISH GR] TTS TEXT TRUNCATED!!!!! to " + text)
         audiofile = client.predict(
-            **FishTTSGradioKWArgs(
-                text=text,
-                # normalize=True,
-                reference_id="",  # seems like its internal id in fish
-                reference_audio=handle_file(ref),
-                reference_text=ref_text,
-                max_new_tokens=500,  # 0 means no limit, 500 tokens ~= 30 secs
-                chunk_length=200,  # TODO new untested
-                top_p=0.7,
-                repetition_penalty=1.2,
-                temperature=0.4,  # TODO UNTESTED was 0.7
-                # seed=0,
-                # use_memory_cache="off",  # TODO untested, was disabled
-                api_name="/partial",
-            )
+            text=text,
+            reference_id="professor",
+            reference_audio=handle_file(ref),
+            reference_text=ref_text,
+            max_new_tokens=1024,
+            chunk_length=200,
+            top_p=0.7,
+            repetition_penalty=1.3,
+            temperature=0.6,
+            seed=0,
+            use_memory_cache="on",
+            api_name="/partial",
         )[0]
         sr, data = wavfile.read(audiofile)
         data = data.astype(np.float32) / np.iinfo(np.int16).max
-        data = change_pitch_speed(data, sr, 1.05)  # let's some roll =)
+        data = change_pitch_speed(data, sr, 1.05)
+        data = post_process_tts(data, sr)
         return data, sr
     else:
 

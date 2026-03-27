@@ -8,7 +8,7 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents.base import Document
 from langchain_core.vectorstores import VectorStoreRetriever
-from langchain_openai import OpenAIEmbeddings
+from langchain_mistralai import MistralAIEmbeddings
 from langchain_text_splitters import TextSplitter
 
 if __name__ == "__main__":
@@ -101,15 +101,10 @@ class RagModel:
             f"[RagModel Timing] Document loading took {time.time() - load_time_start:.2f} seconds"
         )
 
-        lm_studio_api = get_secret("lm_studio_api_ext")
-        embed_model = get_secret("embeddings_model")
         try:
-            self.embeddings = OpenAIEmbeddings(
-                model=embed_model,
-                deployment=embed_model,
-                openai_api_base=lm_studio_api,
-                check_embedding_ctx_length=False,
-                api_key="dfsgdfgdfh",
+            self.embeddings = MistralAIEmbeddings(
+                model="mistral-embed",
+                api_key=os.getenv("MISTRAL_API_KEY"),
             )
         except Exception as e:
             print(f"[RagModel] Error initializing embeddings: {str(e)}. RAG WILL NOT WORK!")
@@ -118,15 +113,17 @@ class RagModel:
         self.load_vec_store()
 
         self.retrivers: Dict[str, VectorStoreRetriever] = {}
-        self.retrivers[self.index_name] = self.vec_store.as_retriever(
-            search_kwargs={"filter": {"kind": self.index_name}, "k": 3}
-        )
+        if self.vec_store is not None:
+            self.retrivers[self.index_name] = self.vec_store.as_retriever(
+                search_kwargs={"filter": {"kind": self.index_name}, "k": 3}
+            )
+            self.rag_warmup()
+        else:
+            print("[RagModel] WARNING: vec_store is None, RAG will not work!")
 
         print(
             f"[RagModel Timing] Total initialization took {time.time() - start_time:.2f} seconds"
         )
-
-        self.rag_warmup()
 
     def rag_warmup(self):
         # Warmup
@@ -194,12 +191,15 @@ class RagModel:
         return wordkeys
 
     def retrieve_full(self, query) -> List[Tuple[Document, float]]:
+        if self.vec_store is None:
+            return []
         with timing_context("similarity_search_with_score"):
             return self.vec_store.similarity_search_with_score(query)
 
     def retrieve(self, query) -> List[Document]:
+        if self.index_name not in self.retrivers:
+            return []
         with timing_context("retrieve"):
-            # query = "Find and explain special russian new slang words in the following text:" + query
             return self.retrivers[self.index_name].invoke(query)
 
     def explain(self, query: str) -> str:

@@ -1,10 +1,32 @@
 import librosa
 import numpy as np
 from pydub import AudioSegment
+from scipy.signal import butter, sosfilt
 
 
-def change_pitch_speed(audio, sr, change_pitch):
-    return librosa.resample(audio, orig_sr=sr, target_sr=int(sr * (1 / change_pitch)))
+def change_pitch_speed(audio, sr, speed_factor):
+    """Speed up/slow down audio while preserving sample rate using time-stretching."""
+    stretched = librosa.effects.time_stretch(audio, rate=speed_factor)
+    return stretched
+
+
+def post_process_tts(audio: np.ndarray, sr: int, noise_gate_db: float = -40.0, lowpass_hz: int = 8000) -> np.ndarray:
+    """Post-process TTS output: low-pass filter + noise gate + peak normalization."""
+    # Low-pass filter to remove electronic/metallic artifacts
+    sos = butter(5, lowpass_hz, btype='low', fs=sr, output='sos')
+    audio = sosfilt(sos, audio)
+
+    # Noise gate: silence anything below threshold
+    threshold = 10 ** (noise_gate_db / 20.0)
+    audio = np.where(np.abs(audio) < threshold, 0.0, audio)
+
+    # Peak normalization to -1.0 dB headroom
+    peak = np.max(np.abs(audio))
+    if peak > 0:
+        target = 10 ** (-1.0 / 20.0)  # -1 dB
+        audio = audio * (target / peak)
+
+    return audio
 
 
 def resample_audio_segment(audio_segment: AudioSegment, target_sr: int) -> AudioSegment:
