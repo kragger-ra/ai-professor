@@ -87,7 +87,7 @@ CTX_SWARM_EMPTY = {
         "thoughts": THOUGHTS_FORMAT.copy(),  # TODO untested
         "summary": "",
         "plan": "",
-        "personality": "streamer_abstract",  # from resources/prompts/personalities.yml
+        "personality": "professor_default",  # from resources/prompts/personalities_professor.yml
         "game_state": "System started, no info got in game, situation: neutral. Needs update!",
         "chat_state": "System started so chat is empty, situation in chat: neutral. Needs update!",
         "emotional_state": "Эмоция: Весёлая!\nСилы: Много!\nКомментарий: Пока ещё никто не успел испортить настроение, совсем недавно запущена. Needs update!",

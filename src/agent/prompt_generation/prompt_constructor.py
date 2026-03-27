@@ -370,9 +370,9 @@ def construct_prompt(
         str: constructed prompt
     """
     # Get system template from personalities
-    system_template = prompt_load(
-        "personalities", ctx_swarm["states"].get("personality", "streamer_abstract")
-    )
+    personality_key = ctx_swarm["states"].get("personality", "professor_default")
+    personality_file = "personalities_professor" if "professor" in personality_key else "personalities"
+    system_template = prompt_load(personality_file, personality_key)
     # "megabattle_yandere")
 
     # Get current system status
