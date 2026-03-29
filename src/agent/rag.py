@@ -24,6 +24,11 @@ RAG_DOCS_DIR = os.path.join(
     "Documents",
 )
 
+RAG_COURSE_DIR = os.path.join(
+    REPO_RESOURCE_PATH,
+    "RAG",
+)
+
 RAG_STORE_DIR = os.path.join(REPO_DATA_PATH, "rag_vector_store")
 
 
@@ -90,12 +95,19 @@ class RagModel:
         )
         # self.index_filename = self.index_name + ".index"
         self.dataloader = CustomDirectoryLoader(RAG_DOCS_DIR, [self.index_name])
+        self.course_loader = CustomDirectoryLoader(RAG_COURSE_DIR, ["course_materials"])
         self.text_splitter = CustomTripleNewLineSplitter(
             chunk_size=1000, chunk_overlap=0
         )
 
         load_time_start = time.time()
         self.docs = self.dataloader.load(self.text_splitter)
+        try:
+            course_docs = self.course_loader.load(self.text_splitter)
+            self.docs.extend(course_docs)
+            print(f"[RagModel] Loaded {len(course_docs)} course material chunks")
+        except Exception as e:
+            print(f"[RagModel] No course materials loaded: {e}")
         self.wordkeys = self.get_docs_wordkeys(self.docs)
         print(
             f"[RagModel Timing] Document loading took {time.time() - load_time_start:.2f} seconds"

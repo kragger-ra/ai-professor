@@ -1,0 +1,37 @@
+Конфигурация NetTyan — настройка .env файла
+Файл .env.example нужно переименовать в .env и заполнить настройки.
+
+
+Конфигурация ников персонажа
+SELF_NAME — основное имя персонажа (должно совпадать с SELF_MINECRAFT_NICKNAME).
+SELF_YOUTUBE_DISPLAYNAME, SELF_YOUTUBE_CHANNEL_ID, SELF_TWITCH_USERNAME, SELF_TROVO_USERNAME — ники на платформах.
+SELF_DISCORD_DISPLAYNAME, SELF_DISCORD_USERNAME — Discord.
+RAZRABS — список ников союзников через запятую без пробелов, включая ник персонажа.
+BOT_NICKNAMES — список ников и синонимов бота через запятую.
+
+
+Настройка LLM
+Без LLM персонаж не работает. Рекомендация для теста: Mistral API — бесплатные лимиты, работает из РФ.
+CORE_LLM_MODEL_NAME="mistral/pixtral-large-latest"
+VISION_LLM_MODEL_NAME="mistral/pixtral-large-latest"
+MISTRAL_API_KEY="" — ключ с сайта Mistral.
+Альтернативы: Google Gemini (нужен VPN), локальный LLM через LM Studio (нужно 8G+ VRAM).
+
+
+Звуковые устройства
+В секции sound devices указать полное название виртуального аудиокабеля.
+Список устройств можно получить командой: python src/tts/audio_device.py
+Или через Python: import sounddevice as sd; sd.query_devices()
+
+
+API сервисы
+Секция API — настройка ключей Twitch и других платформ.
+
+
+Локальный запуск LLM через LM Studio
+Скачать LM Studio (https://lmstudio.ai/), установить модель (Q2 для 6G VRAM, Q3 для 8G, Q4 для 8G+).
+Контекст модели: 10000 токенов — нужно для агентной части.
+Также нужна embedding-модель cm4ker/USER-bge-m3-Q4_K_M-GGUF (250MB) для RAG-системы.
+Запустить API сервер в LM Studio на порту 22227.
+В .env: CORE_LLM_MODEL_NAME="lm_studio/", LM_STUDIO_API_BASE="http://localhost:22227/v1"
+Убедиться, что CORE_LLM_MODEL_NAME указан только один раз (остальные закомментированы через #).

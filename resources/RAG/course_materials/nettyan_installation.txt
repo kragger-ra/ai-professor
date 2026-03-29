@@ -1,0 +1,48 @@
+Установка NetTyan — Python-часть проекта ИИ-персонажа
+Требования: ffmpeg, Python 3.10+, UV менеджер, опционально Docker и CUDA
+
+
+Установка ffmpeg
+ffmpeg нужен для обработки аудио. На Windows: winget install ffmpeg (PowerShell от администратора). На Linux Ubuntu: sudo apt-get install libportaudio2 python3-pyaudio portaudio19-dev python3-dev build-essential ffmpeg. На MacOS: brew install ffmpeg.
+Важно: НЕ запускайте Python-часть на WSL под Windows — будут проблемы со звуковыми устройствами и портами.
+
+
+Docker (опционально)
+Docker нужен для запуска крутой TTS (Fish TTS) и системы фильтрации. Требования: более 8G RAM, не менее 4G VRAM. Установка: https://www.docker.com/ — рекомендуется Docker Desktop.
+Можно пропустить Docker, если не нужен Fish TTS — есть упрощённая версия TTS (Vosk).
+
+
+UV менеджер — установка Python
+UV — быстрый менеджер пакетов Python. Установка: https://docs.astral.sh/uv/getting-started/installation/
+Установка Python через UV: uv python install 3.10.9
+Создание виртуального окружения: uv venv --python 3.10.9
+Старый способ без UV: python -m venv .venv, затем pip install uv
+
+
+CUDA и CuDNN для TTS и STT
+Для Fish TTS и STT нужны: Nvidia CUDA 12.9 (3.1 GB), Nvidia CuDNN 9.15 (700 MB).
+Для Windows: после установки CuDNN нужно добавить путь в PATH: C:\Program Files\NVIDIA\CUDNN\v9.15\bin\12.9
+После установки CUDA и CuDNN — перезагрузить компьютер.
+
+
+Установка зависимостей
+В терминале IDE, в папке репозитория. Быстрый способ — все группы сразу: uv sync --all-groups
+Для конкретных групп: uv sync --group dev --group simpletts --group stt
+
+
+TTS — два варианта
+Простой способ (Vosk): uv pip install --group simpletts
+Крутой способ (Fish TTS): через Docker, см. раздел Docker-воркеры.
+
+
+STT — распознавание речи
+Если есть CUDA: uv pip install --group gpu, затем uv pip install --group stt
+В .env указать STT_COMPUTE_DEVICE=CUDA для GPU-трека. По умолчанию CPU.
+При первом запуске скачивается STT модель — может понадобиться VPN.
+
+
+Docker-воркеры
+Только для CUDA-трека. В папке docker/filter/:
+Только TTS: docker-compose -f docker-compose-tts.yml up --build
+TTS + фильтр: docker-compose up --build
+Фильтр можно остановить через Docker Desktop после запуска (контейнер filter-1).
