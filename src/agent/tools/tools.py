@@ -28,7 +28,6 @@ from agent.tools.control_tools import (
     agent_wipe_state_effects,
     change_personality,
     directive,
-    enter_yandere_mode,
 )
 from agent.tools.dialogue_tools import dialogue_step, dislike, like
 from agent.tools.fun_tools import analyze_nickname
@@ -123,7 +122,6 @@ ALL_TOOLS = [
     # control_tools
     directive,
     change_personality,
-    enter_yandere_mode,
     agent_start_effects,
     agent_wipe_state_effects,
     agent_wipe_state,
@@ -146,7 +144,6 @@ DEFAULT_DISABLED_TOOLS = [
     # control_tools FOR DEV
     directive,
     change_personality,
-    enter_yandere_mode,
     agent_start_effects,
     agent_wipe_state_effects,
     agent_wipe_state,

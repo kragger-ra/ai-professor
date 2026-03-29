@@ -150,7 +150,7 @@ def HudLayerHandler(
         "whispering": "🤫",
         "disgusted": "🤢",
         "sarcastic": "🙃",
-        "yandere": "🔪",
+        "thoughtful": "🤔",
     }
 
     @app.route("/mood_data")

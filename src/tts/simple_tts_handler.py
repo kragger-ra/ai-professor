@@ -1,4 +1,5 @@
 import asyncio
+import os
 import time
 import traceback
 from threading import Thread
@@ -20,7 +21,7 @@ SPELL_TO_EMOTION = {
     "frightened": "scared",
     "fearful": "scared",
     "fear": "scared",
-    "crazy": "yandere",
+    "crazy": "angry",
     "vengeful": "angry",
     "flirt": "sarcastic",
     "teasing": "sarcastic",
@@ -28,6 +29,8 @@ SPELL_TO_EMOTION = {
     "joking": "sarcastic",
     "curious": "happy",
     "agressive": "angry",
+    "thoughtful": "neutral",
+    "encouraging": "happy",
 }
 
 SPELL_TO_EMOTIONS_RU = {
@@ -36,13 +39,14 @@ SPELL_TO_EMOTIONS_RU = {
     "злая": "angry",
     "страх": "scared",
     "боится": "scared",
-    "яндере": "yandere",
     "агрессивная": "angry",
     "флирт": "sarcastic",
     "идевается": "sarcastic",
     "флиртует": "sarcastic",
     "любопытная": "happy",
     "бесится": "angry",
+    "задумчивый": "neutral",
+    "одобряет": "happy",
 }
 
 SPELL_TO_EMOTION.update(SPELL_TO_EMOTIONS_RU)
@@ -59,44 +63,38 @@ EMOTION_TO_COMMAND_OLD = {
 }
 
 EMOTION_TO_COMMAND_ESCAPED = {
-    "neutral": "\u00a7eНейтральная",
-    "happy": "\u00a76Весёлая",
-    "sad": "\u00a7bГрустная",
-    "angry": "\u00a74ЗЛАЯ",
-    "scared": "\u00a79Боится",
-    "whispering": "\u00a7dУгарает",
-    "disgusted": "\u00a7aХочет блевать",
-    "sarcastic": "\u00a7Саркастичная",
-    "yandere": "\u00a74☠☠☠",
+    "neutral": "\u00a7eНейтральный",
+    "happy": "\u00a76Весёлый",
+    "sad": "\u00a7bГрустный",
+    "angry": "\u00a74Строгий",
+    "scared": "\u00a79Удивлён",
+    "whispering": "\u00a7dШёпот",
+    "disgusted": "\u00a7aНедоволен",
+    "sarcastic": "\u00a7Ироничный",
 }
 
 EMOTION_TO_COMMAND = {
-    "neutral": 'Нейтральная","color":"gold',
-    "happy": 'Весёлая","color":"green',
-    "sad": 'Грустная","color":"gold',
-    "angry": 'ЗЛАЯ","color":"red',
-    "scared": 'Боится","color":"blue',
-    "whispering": 'Угарает","color":"gold',
-    "disgusted": 'Хочет блевать","color":"green',
-    "sarcastic": 'Саркастичная","color":"gold',
-    "yandere": '☠☠☠","color":"red',
+    "neutral": 'Нейтральный","color":"gold',
+    "happy": 'Весёлый","color":"green',
+    "sad": 'Грустный","color":"gold',
+    "angry": 'Строгий","color":"red',
+    "scared": 'Удивлён","color":"blue',
+    "whispering": 'Шёпот","color":"gold',
+    "disgusted": 'Недоволен","color":"green',
+    "sarcastic": 'Ироничный","color":"gold',
 }
 
 
-# bossbar set 100 name "NetTyan сейчас: Злая"
 SELF_NAME = get_name()
-for k, v in EMOTION_TO_COMMAND.items():
-    # EMOTION_TO_COMMAND[k] = "st " + v + ""
-    # /minestamp advance :abacus: 1 1 2
-    # EMOTION_TO_COMMAND[k] = "minestamp advance :" + v + ": 5 1 1"
-    # MEGABATTLE
-    EMOTION_TO_COMMAND[k] = (
-        'bossbar set 100 name [{"text":"'
-        + SELF_NAME
-        + 'сейчас: ","color":"white"},{"text":"'
-        + v
-        + '"}]'
-    )
+if os.getenv("ENABLE_MINECRAFT_HUD"):
+    for k, v in EMOTION_TO_COMMAND.items():
+        EMOTION_TO_COMMAND[k] = (
+            'bossbar set 100 name [{"text":"'
+            + SELF_NAME
+            + ' сейчас: ","color":"white"},{"text":"'
+            + v
+            + '"}]'
+        )
 
 # TODO locks add
 

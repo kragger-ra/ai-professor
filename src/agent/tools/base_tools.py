@@ -181,7 +181,7 @@ def speak(comment: str, emotion: Optional[str] = None) -> bool:
         comment:
             Str, commentary to speak with your mouth (VERY SHORT, NOT MORE than ~10 words)
         emotion:
-            Str, emotion type for speech. Can be STRICT any of [`neutral`, `happy`, `sad`, `angry`, `scared`, `whispering`, `disgusted`, `sarcastic`]. Secret emotion `yandere` will glitch your face, but use it not too often.
+            Str, emotion type for speech. Can be STRICT any of [`neutral`, `happy`, `sad`, `angry`, `scared`, `whispering`, `disgusted`, `sarcastic`, `thoughtful`, `encouraging`].
 
     You can use emotion in one comment argument like comment "hi, how are you? *happy*"
     """

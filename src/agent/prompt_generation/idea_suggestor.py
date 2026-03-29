@@ -12,7 +12,7 @@ from utils.prompt_helper import prompt_template_load
 
 
 def get_random_idea(
-    personality: str = "streamer_abstract", include_base: bool = True
+    personality: str = "professor_default", include_base: bool = True
 ) -> str:
     """Retrieve a random idea for use in LLM"""
 

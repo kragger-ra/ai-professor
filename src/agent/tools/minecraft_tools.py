@@ -49,7 +49,7 @@ TASK_COMMANDS_MAP = {
     "love": "t shift",
     "kiss": "t shift",
     "pokebutt": "t shift",
-    "yandere": "t combat",
+    "combat": "t combat",
     "follow": "t follow",
     "find": "t follow",
     "grave": "t grave",

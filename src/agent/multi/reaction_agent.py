@@ -77,7 +77,7 @@ class ReactionAgent(BaseAgent):
             return ""
 
         # Build minimal prompt
-        personality = self.ctx_swarm["states"].get("personality", "streamer_abstract")
+        personality = self.ctx_swarm["states"].get("personality", "professor_default")
         system_prompt = prompt_load("personalities", personality)
 
         # Get speak tool info

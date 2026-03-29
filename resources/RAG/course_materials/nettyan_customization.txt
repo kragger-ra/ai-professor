@@ -19,7 +19,7 @@
 emotion_name:
   wav: filename_without_extension
   text: РАСШИФРОВКА
-Пример: если персонаж выдаст эмоцию yandere, и в манифесте есть запись yandere с wav: yandere и text: ОКАК, то файл resources/Audio/refs/yandere.wav будет передан в TTS.
+Пример: если персонаж выдаст эмоцию happy, и в манифесте есть запись happy с wav: happy и text: ПРИВЕТ, то файл resources/Audio/refs/happy.wav будет передан в TTS.
 Базовая эмоция — neutral, на неё реф обязателен. Остальные эмоции — по желанию.
 
 

@@ -6,10 +6,7 @@ base: |
   `@follow <player>` - follow target
   `@check_player <player>` - check if target is present in the world and where
   `@forget` - forget all avoiding and pursuing targets, not stopping current main task
-  `@duck <player>` - imitate 18+ adult action, pressing shift button near target's butt
-  `@love <player>` - imitate 18+ adult action, pushes your pelvis to the face of target
   `@askpeace <player>` - ask target not to kill you
-  `@yandere` - kill everyone starting with closest
   `@gesture <player> <gesture>` - show gesture (Fight/Sad/Angry/Disrespect/Hey/Agree/Disagree)
       Additional gestures: BrawlStars (spinning), Crazy, Cheer
 
@@ -29,7 +26,6 @@ survival: |
   `@grave <text>` - construct a grave with specified text
   `@smash` - build a tower and jump on player heads with mace
   `@game speedrun` - start beating game (survival mode dragon kill)
-  `@game yandere` - start terminator mode - killing all players (if they are present here)
 
 minigame: |
   `@game <gameType>` - choose gaming pipeline (SkyWars/MurderMystery)

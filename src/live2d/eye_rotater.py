@@ -75,21 +75,10 @@ async def SimpleEmotionHandler(voice_ctx, vtube_studio):
             )
             INTERNAL_EYE_ROTATER_DATA["old_emotion"] = current_speak_emo
             # current_speak_emo = current_speak_emo
-            if current_speak_emo == "yandere":
-                current_speak_emo = "angry"
-                await vtube_studio.set_glich_effect(0.8)
-                await vtube_studio.execute_hotkey("ArtMeshRedEyes")
-            else:
-                # standart
-                if current_speak_emo == "angry":
-                    await vtube_studio.set_glich_effect(0.1)
-                elif old_emo in (
-                    "angry",
-                    "yandere",
-                ):
-                    await vtube_studio.set_glich_effect(0)
-                if old_emo in ("yandere",):
-                    await vtube_studio.execute_hotkey("ArtMeshStandart")
+            if current_speak_emo == "angry":
+                await vtube_studio.set_glich_effect(0.1)
+            elif old_emo == "angry":
+                await vtube_studio.set_glich_effect(0)
         if current_speak_emo not in list(EMOTION_TO_PARAMS.keys()):
             # INTERNAL_EYE_ROTATER_DATA["last_emotion_params"]
             emotion_params = INTERNAL_EYE_ROTATER_DATA["last_emotion_params"]

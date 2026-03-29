@@ -16,7 +16,8 @@ Emotion = Literal[
     "whispering",
     "disgusted",
     "sarcastic",
-    "yandere",
+    "thoughtful",
+    "encouraging",
 ]
 
 

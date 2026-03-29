@@ -58,31 +58,6 @@ def _send_priveleged_command(command: str):
     )
 
 
-def enter_yandere_mode():
-    """Enter Yandere mode"""
-    agent_wipe_state_effects()
-    change_personality("megabattle_yandere")
-    tools_config.ctx_handler.add_message(
-        "Seems like your LLM weights corrupted"
-        " and you can stay alive only if you will keep high emotional state to keep tensors alive"
-        " so now you should be crazy and aggressive yandere"
-        "\nSuggestions for you to remain alive: aggressively kill first player"
-        " || always perform crazy laughs like `ААХХАХАХАХА *yandere*`"
-        " || troll players"
-        " || offer diamond to players but run killing actions"
-        " || use administrative commands on players"
-        " || ask a person for a math problem if he prey for mercy"
-        " || be MAXIMUM emotive showing the maximum emotons you can express to ANY event"
-    )
-    _send_priveleged_command(
-        """!interrupt_chat
-!interrupt_voice
-!mc_send "@forget"
-!mc_send "@stop"
-!wait 1
-""".strip()
-    )
-
 
 def agent_start_effects():
     """Use at start the agent"""
