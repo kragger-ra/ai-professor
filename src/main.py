@@ -34,10 +34,6 @@ def _log_timing(msg: str):
 
 _log_timing("System imports done. Starting main import sequence")
 
-try:
-    from data_collectors.donations_sio import donations_handler
-except ImportError:
-    donations_handler = None
 
 # TODO untested
 # Configure logging - allow smolagents but disable others
@@ -63,8 +59,6 @@ import pandas as pd  # 0.5s to import
 
 _log_timing("pandas imported")
 from config_schema.general import get_name, get_secret
-from data_collectors.minebridge import mine_bridge_handler
-from data_collectors.social_service import socialChatListener
 from data_flow.filter_client import ctx_filter_handler
 from data_schema.structure_templates import (
     CTX_SWARM_EMPTY,
@@ -682,16 +676,6 @@ def main():
         )
     ctx_handler = CtxHandler(ctx_swarm)
     # ctx_swarm["fx_queue"].put("starting")
-    _log_timing("Starting MineBridgeProc process")
-    MineBridgeProc = Process(
-        target=mine_bridge_handler,
-        kwargs={
-            "ctx_swarm": ctx_swarm,
-        },
-    )  # Thread(target = a, kwargs={'c':True}).start()
-    MineBridgeProc.start()
-    processes.append(MineBridgeProc)
-    _log_timing("MineBridgeProc started")
     textSubtitlesHttp = manager.Value("u", "")
     TextDisplaySpeed = manager.Value("u", "fast")
     RefreshInterval = manager.Value("i", 3)
@@ -733,34 +717,6 @@ def main():
     processes.append(FILTER_Proc)
     _log_timing("FILTER_Proc started")
 
-    ctx_twitch_actions_queue = manager.Queue()
-    ctx_trovo_actions_queue = manager.Queue()
-    ctx = manager.Namespace()
-    ctx.YoutubeActionsQueue = manager.list()
-    ctx.YouTubeCommentCheckerEnabled = True
-    ctx.YouTubeAppEnabled = False
-    ctx.IsYTChatConnected = False
-    # start_social = bool(get_secret("START_SOCIAL"))
-    # if start_social:
-    start_social = not args.offline
-    print("[main.py] start_social =", start_social)
-    if start_social:
-        _log_timing("Starting Social_Proc process")
-        Social_Proc = Process(
-            target=socialChatListener,
-            args=(
-                ctx,
-                ctx_twitch_actions_queue,
-                ctx_trovo_actions_queue,
-                ctx_chat,
-                ctx_swarm,
-            ),
-        )
-        Social_Proc.start()
-        processes.append(Social_Proc)
-        _log_timing("Social_Proc started")
-    else:
-        pass  # offline mode: no social services, no donations
     DO_BLOCK = True
     _log_timing(
         f"Core model config: {os.getenv('CORE_LLM_MODEL_NAME')} @ {os.getenv('CORE_LLM_API_BASE')}"

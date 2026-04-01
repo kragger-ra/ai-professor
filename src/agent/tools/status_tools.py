@@ -28,7 +28,6 @@ from langchain_core.tools import StructuredTool
 
 from agent.tools import tools_config
 from data_schema.tool_structures import ToolRecord
-from utils.minecraft_helper import format_task_chain
 from utils.time_helper import format_relative_time
 
 
@@ -198,7 +197,7 @@ def get_thought_status() -> str:
 
 def get_game_status() -> str:
     """Get status of the game process"""
-    return format_task_chain(tools_config.ctx_swarm)
+    return ""
 
 
 def get_tts_status() -> str:

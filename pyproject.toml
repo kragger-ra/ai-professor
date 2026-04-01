@@ -18,9 +18,7 @@ dependencies = [
     "mistralai~=1.9.11",
     "mss~=10.1.0",
     "dotenv~=0.9.9",
-    "obsws-python~=1.8.0",
     "pip~=25.2",
-    "py4j~=0.10.9.9",
     "pygame~=2.6.1",
     "python-dotenv~=1.1.1",
     "python-socketio~=5.14.2",
@@ -32,9 +30,6 @@ dependencies = [
 ]
 
 [dependency-groups]
-collectors = [
-    "twitchapi~=4.5.0",
-]
 dev = [
     "black~=25.9.0",
     "isort~=7.0.0",
@@ -56,4 +51,4 @@ nettyan = "main:main"
 
 [tool.uv]
 package = true
-default-groups = ["dev", "stt", "collectors"]
+default-groups = ["dev", "stt"]

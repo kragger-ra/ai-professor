@@ -1,60 +1,24 @@
 warning: alarms/entropic_alert_1.wav
-ready: alarms/mechanic_alarm.wav
-filter: records/Система фильтрации не игрушка фильтруйте базар.wav
-record_deleted: records/Запись удалена..wav
-error: records/Ошибка.wav
+ready: alarms/ready.wav
+error: none.wav
 none: none.wav
 poweronloud: other/light_power_on_01.wav
 poweron: other/light_power_on_02.wav
 poweroff: other/light_power_off_02.wav
-internetact: records/DictorTOP_интернет-модуль активирован.wav
-powerstarting: records/wakeup.wav
-banword: records/Бан.wav
-stability_decrease: records/Уровень стабильности снижен..wav
-stalemale: records/Обнаружена безвыходная ситуация..wav
-personality_remove: records/Отпечатки личности ликвидированы..wav
-washover_event: other/arbeit_warning_temporalevent.wav
-core_deceased: other/arbeit_warning_upload_deceased.wav
-bell: alarms/opxmas_elevator_bell.wav
-ready: alarms/ready.wav
 busy: alarms/busy.wav
-thinking: none.wav  # alarms/disk_start_rotate.wav
+thinking: none.wav
 operation: alarms/operation.wav
 database_add: alarms/disk_save.wav
-internet:
-- poweron
-- none
-- none
-- internetact
-filtered:
-- warning
-- filter
+bell: alarms/opxmas_elevator_bell.wav
 wiped_state:
-- sequence: fatal_errored
-  delay: 4
-  wait: True
-# - stalemale
-# - delay: 2
-# - washover_event
-# - delay: 2.3
 - bell
-# - sequence: personality_remove
-#   wait: True
 - sequence: starting
   wait: True
 fatal_errored:
 - poweroff
 - delay: 1
 - warning
-# - delay: 1
-# - core_deceased
-errored:
-- poweronloud
-- none
-- none
-- stability_decrease
 starting:
 - poweron
 - none
 - none
-# - powerstarting

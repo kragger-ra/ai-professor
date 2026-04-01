@@ -30,14 +30,6 @@ from agent.tools.control_tools import (
     directive,
 )
 from agent.tools.dialogue_tools import dialogue_step, dislike, like
-from agent.tools.fun_tools import analyze_nickname
-from agent.tools.minecraft_tools import (
-    MC_CONTROL_TOOLS,
-    agent_action,
-    agent_action_tool_status,
-    minecraft_command,
-    minecraft_command_tool_status,
-)
 from agent.tools.state_tools import focus, pattern, plan, state_update
 from agent.tools.status_tools import (
     convert_tools_to_langchain,
@@ -56,7 +48,6 @@ from agent.tools.status_tools import (
 )
 from agent.tools.tool_executor import execute_tools
 from agent.tools.vision_tools import screenshot
-from agent.tools.vote_tools import finish_vote, start_vote, vote_register
 from data_schema.structure_templates import FX_MANIFEST
 from data_schema.tool_structures import ToolRecord
 from utils.debug import bcolors
@@ -95,9 +86,6 @@ ALL_TOOLS = [
     dialogue_step,
     like,  # TODO UNTESTED!!!
     dislike,
-    # minecraft_tools
-    agent_action,
-    minecraft_command,
     # state_tools
     focus,
     pattern,
@@ -115,10 +103,6 @@ ALL_TOOLS = [
     toggle_tool,
     enable_tool,
     disable_tool,
-    # vote_tools
-    vote_register,
-    finish_vote,
-    start_vote,
     # control_tools
     directive,
     change_personality,
@@ -128,16 +112,9 @@ ALL_TOOLS = [
     # local tools
     fx,
     get_fx_names,
-    # fun tools
-    analyze_nickname,
 ]
 
-# special status tool naming for corresponding tools
-# e.g. for tool "minecraft_command" -> "minecraft_command_tool_status"
-TOOL_STATUSES = [
-    minecraft_command_tool_status,
-    agent_action_tool_status,
-]
+TOOL_STATUSES = []
 
 # only for operator-use tools
 DEFAULT_DISABLED_TOOLS = [
@@ -178,7 +155,6 @@ DEFAULT_DISABLED_TOOLS = [
 # REDUDANT FOR NOW
 
 INTERRUPT_TOOLS = [interrupt_chat, interrupt_voice]
-VOTING_TOOLS = [finish_vote, start_vote, vote_register]
 SPEAK_TOOLS = [speak, save_user_info]
 STATE_TOOLS = [plan, focus]
 DIALOGUE_TOOLS = [dialogue_step]
@@ -187,13 +163,11 @@ AGENT_SUPERVISOR_TOOLS = []
 AGENT_SUPERVISOR_TOOLS.extend(SPEAK_TOOLS)
 AGENT_SUPERVISOR_TOOLS.extend(GENERATOR_TOOLS)
 AGENT_SUPERVISOR_TOOLS.extend(INTERRUPT_TOOLS)
-AGENT_SUPERVISOR_TOOLS.extend(MC_CONTROL_TOOLS)
 
 AGENT_SUPERVISOR_TOOLS.extend([wait])
 
 AGENT_SUPERVISOR_TOOLS_RAW = AGENT_SUPERVISOR_TOOLS.copy()
 AGENT_SMO_TOOLS_RAW = AGENT_SUPERVISOR_TOOLS_RAW.copy()
-# AGENT_SMO_TOOLS_RAW.extend(VOTING_TOOLS)  # TOO unstable in arguments
 AGENT_SMO_TOOLS_RAW.append(state_update)
 AGENT_SUPERVISOR_TOOLS_RAW.extend(STATE_TOOLS)
 
@@ -203,9 +177,7 @@ AGENT_SUPERVISOR_TOOLS_RAW.extend(STATE_TOOLS)
 
 AGENT_SUPERVISOR_TOOLS = convert_tools_to_langchain(AGENT_SUPERVISOR_TOOLS)
 
-INTERRUPT_TOOLS_NAMES = [tool_item.__name__ for tool_item in INTERRUPT_TOOLS] + [
-    "finish_vote"
-]
+INTERRUPT_TOOLS_NAMES = [tool_item.__name__ for tool_item in INTERRUPT_TOOLS]
 
 
 def get_tool_records(output_format: str = "list") -> Dict[str, ToolRecord]:
