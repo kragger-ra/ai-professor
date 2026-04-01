@@ -229,7 +229,11 @@ class StreamToTextbox:
             sys.stdout.write = self._write
 
     def _write(self, text):
-        self.old_stdout_write(text)
+        try:
+            self.old_stdout_write(text)
+        except UnicodeEncodeError:
+            safe = text.encode(sys.stdout.encoding or "ascii", errors="replace").decode(sys.stdout.encoding or "ascii")
+            self.old_stdout_write(safe)
         self.log_content.write(text)
         return len(text)
 
@@ -772,10 +776,11 @@ def main():
     if start_stt:
         print("[main.py] Speech to Text feature is enabled.")
         _log_timing("Starting STTProc process")
+        from data_collectors.stt.mic_stt_handler import mic_stt_handler
+        stt_device_name = os.getenv("SOUND_DEVICE_IN", "")
         STTProc = Process(
-            # target=simple_stt_handler,  # for mic device
-            target=run_voice_processor,  # for audio queue
-            args=(ctx_swarm,),
+            target=mic_stt_handler,
+            kwargs={"ctx_swarm": ctx_swarm, "audio_device_name": stt_device_name},
         )
         STTProc.start()
         processes.append(STTProc)

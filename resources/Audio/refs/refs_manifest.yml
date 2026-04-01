@@ -10,6 +10,26 @@ sad:
   wav: professor_neutral
   text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей
 
+angry:
+  wav: professor_neutral
+  text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей
+
+scared:
+  wav: professor_neutral
+  text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей
+
+whispering:
+  wav: professor_neutral
+  text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей
+
+disgusted:
+  wav: professor_neutral
+  text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей
+
+sarcastic:
+  wav: professor_neutral
+  text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей
+
 thoughtful:
   wav: professor_neutral
   text: Добро пожаловать на курс PersonaLab по созданию цифровых персонажей

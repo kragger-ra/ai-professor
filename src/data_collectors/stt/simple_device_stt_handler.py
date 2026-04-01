@@ -21,22 +21,31 @@ from utils.time_helper import eztime
 
 
 def get_audio_device(device_name="") -> int:
-    """List all available audio input devices"""
+    """Find audio input device by name. Prefers MME host API (indices 12+) on Windows."""
     if not device_name:
         print("\nAvailable audio input devices:")
     import sounddevice as sd
 
     devices = sd.query_devices()
+    matches = []
     for i, device in enumerate(devices):
-        if device["max_input_channels"] > 0:  # Only show input devices
+        if device["max_input_channels"] > 0:
             if not device_name:
                 print(f"{i}: {device['name']}")
             elif device_name in device["name"]:
-                print(f"[STT] Selected audio device {i}: {device['name']}")
-                return i
+                matches.append((i, device["name"]))
 
     if not device_name:
         print()
+        return sd.default.device[0]
+
+    if matches:
+        # Prefer MME devices (higher indices) — they work reliably on Windows
+        best = max(matches, key=lambda x: x[0] if x[0] < 30 else 0)
+        print(f"[STT] Selected audio device {best[0]}: {best[1]}")
+        return best[0]
+
+    print(f"[STT] Device '{device_name}' not found, using default")
     return sd.default.device[0]
 
 
@@ -66,13 +75,16 @@ def simple_stt_handler(
             )
             ctx_handler.add_message(event)
 
+    stt_device = os.getenv("STT_COMPUTE_DEVICE", "cuda")
+    stt_model = os.getenv("FASTER_WHISPER_MODEL_NAME", "small")
+    print(f"[STT] Using model={stt_model}, device={stt_device}, mic_idx={audio_device_index}")
     with AudioToTextRecorder(
         language="ru",
-        model="base",
-        realtime_model_type="base",
+        model=stt_model,
+        realtime_model_type="tiny",
         input_device_index=audio_device_index,
-        device="cuda",
-        spinner=False,  # you can enable it only for debug
+        device=stt_device,
+        spinner=False,
     ) as recorder:
         while ctx_swarm["env"]["actived"]:
             text = recorder.text()

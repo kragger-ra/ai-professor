@@ -142,7 +142,7 @@ def fish_tts(text: str, ref: str, ref_text: str = ""):
             top_p=0.7,
             repetition_penalty=1.3,
             temperature=0.6,
-            seed=0,
+            seed=42,
             use_memory_cache="on",
             api_name="/partial",
         )[0]
