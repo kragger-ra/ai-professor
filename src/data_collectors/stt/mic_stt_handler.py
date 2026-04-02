@@ -32,23 +32,36 @@ BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION_MS / 1000)
 
 # VAD params — energy-based
 SILENCE_THRESHOLD = 200  # RMS threshold (tuned for fifine on low gain)
-SPEECH_MIN_BLOCKS = 5  # min blocks (~0.5s) to count as speech
-SILENCE_AFTER_SPEECH_BLOCKS = 15  # ~1.5s of silence to finalize
+SPEECH_MIN_BLOCKS = 4  # min blocks (~0.4s) to count as speech
+SILENCE_AFTER_SPEECH_BLOCKS = 8  # ~0.8s of silence to finalize
 
 
 def find_mic_device(device_name: str) -> int:
-    """Find input device by name, prefer MME (higher idx < 30)."""
+    """Find input device by name, prefer MME (lowest idx)."""
     devices = sd.query_devices()
     matches = []
     for i, d in enumerate(devices):
-        if d["max_input_channels"] > 0 and device_name in d["name"]:
+        if d["max_input_channels"] > 0 and device_name.lower() in d["name"].lower():
             matches.append((i, d["name"]))
     if matches:
-        best = max(matches, key=lambda x: x[0] if x[0] < 30 else 0)
-        print(f"[MIC-STT] Selected device {best[0]}: {best[1]}")
+        # Prefer lowest index (MME) for best compatibility
+        best = min(matches, key=lambda x: x[0])
+        _stt_log(f"[MIC-STT] Selected device {best[0]}: {best[1]}")
         return best[0]
-    print(f"[MIC-STT] Device '{device_name}' not found, using default")
+    _stt_log(f"[MIC-STT] Device '{device_name}' not found, using default")
     return sd.default.device[0]
+
+
+def _stt_log(msg):
+    """Log to file since subprocess stdout is lost on Windows."""
+    import datetime
+    line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+    print(line, flush=True)
+    try:
+        with open("data/stt_log.txt", "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def mic_stt_handler(
@@ -57,16 +70,22 @@ def mic_stt_handler(
     audio_device_name: str = "",
 ):
     """Main loop: capture mic → VAD → transcribe → add to ctx_chat."""
-    print("[MIC-STT] Starting...")
+    # Clear log
+    try:
+        open("data/stt_log.txt", "w").close()
+    except Exception:
+        pass
+    _stt_log("[MIC-STT] Starting...")
     ctx_handler = CtxHandler(ctx_swarm)
     device = os.getenv("STT_COMPUTE_DEVICE", "cuda")
 
     if audio_device_index is None and audio_device_name:
         audio_device_index = find_mic_device(audio_device_name)
 
-    print(f"[MIC-STT] Loading Whisper on {device}...")
+    _stt_log(f"[MIC-STT] Device index: {audio_device_index}, name: {audio_device_name}")
+    _stt_log(f"[MIC-STT] Loading Whisper on {device}...")
     recognizer = FasterWhisperSTT(device=device)
-    print("[MIC-STT] Ready! Listening...")
+    _stt_log("[MIC-STT] Ready! Listening...")
 
     speech_buffer = []
     silence_count = 0
@@ -91,7 +110,7 @@ def mic_stt_handler(
                         is_speaking = True
                         speech_buffer.clear()
                         silence_count = 0
-                        print("[MIC-STT] Speech started")
+                        _stt_log(f"[MIC-STT] Speech started (RMS={rms:.0f})")
                     speech_buffer.append(audio_chunk.copy())
                     silence_count = 0
                 else:
@@ -109,7 +128,7 @@ def mic_stt_handler(
                                 print("[MIC-STT] Too short, skipping")
                             speech_buffer.clear()
     except Exception as e:
-        print(f"[MIC-STT] Error: {e}")
+        _stt_log(f"[MIC-STT] Error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -125,7 +144,7 @@ def _transcribe_and_send(
     """Transcribe buffered speech and send to agent."""
     audio = np.concatenate(speech_buffer)
     duration = len(audio) / SAMPLE_RATE
-    print(f"[MIC-STT] Transcribing {duration:.1f}s audio...")
+    _stt_log(f"[MIC-STT] Transcribing {duration:.1f}s audio...")
 
     # Convert to WAV bytes for faster-whisper
     from pydub import AudioSegment
@@ -151,7 +170,7 @@ def _transcribe_and_send(
         print("[MIC-STT] Empty result, skipping")
         return
 
-    print(f"[MIC-STT] >>> {text}")
+    _stt_log(f"[MIC-STT] >>> {text}")
 
     user = ctx_swarm["game"].get("last_talking_player", "Student")
     if not user:

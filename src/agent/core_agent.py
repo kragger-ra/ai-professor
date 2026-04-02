@@ -36,7 +36,9 @@ from agent.prompt_generation.prompt_constructor import (
 )
 from agent.rag import RagModel
 from agent.tools import tools_config
-from agent.tools.tools import execute_tool_query, get_tool_records
+from agent.tools.tool_executor import execute_tools
+from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
+from utils.debug import bcolors
 from data_flow.ctx_handler import CtxHandler
 from utils.debug import print_messages
 
@@ -127,7 +129,6 @@ class CoreAgent(BaseAgent):
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
-            # self.ctx_swarm["fx_queue"].put("ready")
             messages, response_starting = construct_prompt_messages(
                 get_tool_records(),
                 self.ctx_handler,
@@ -135,11 +136,14 @@ class CoreAgent(BaseAgent):
                 output_format="langchain",
                 tool_use_format="command",
             )
+            if messages is None:
+                return
             if self.ctx_swarm["env"].get("debug_print_prompt", False):
                 print("Context messages:")
                 print_messages(messages)
-            # Get response from LLM
-            smart_event_waiter = SmartEventWaiter(ctx_handler=self.ctx_handler)
+            smart_event_waiter = SmartEventWaiter(
+                ctx_handler=self.ctx_handler, delay=1
+            )
             self.ctx_swarm["fx_queue"].put("thinking")
             response = execute_tool_query(
                 messages,
@@ -147,19 +151,20 @@ class CoreAgent(BaseAgent):
                 response_starting=response_starting,
             )
             smart_event_waiter.shutdown()
-            # response = self.llm.invoke(messages)
-
-            # Save response to context
-            # self.handler.add_message({
-            #     "msg": response,
-            #     "user": "NetTyan",
-            #     "type": "chat",
-            #     "self": True
-            # })
 
             print(f"Agent response:\n---\n{response}\n---\n")
-            # print(f"Messages state AFTER response")
-            # print_messages(messages)
+
+            # Send full response to TTS as single call
+            if response and isinstance(response, str) and response.strip():
+                from agent.tools.base_tools import _parse_emotion
+                emotion, text = _parse_emotion(response.strip())
+                if not emotion:
+                    emotion = "neutral"
+                text = text.strip()
+                if text:
+                    self.ctx_swarm["tts_queue"].append(
+                        {"text": text, "emotion": emotion}
+                    )
 
         except Exception as e:
             print(f"Error running agent: {e}")

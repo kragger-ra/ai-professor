@@ -211,8 +211,9 @@ def ctx_filter_handler(ctx_swarm: CtxSwarmType):
                             # print(get_secret("RAZRABS").split(","))
                             # print(get_secret("BOT_NICKNAMES").split(","))
                             bypass_filtering = False
+                            razrabs = (get_secret("RAZRABS") or "").split(",")
                             if (
-                                user in get_secret("RAZRABS").split(",")
+                                user in razrabs
                                 or msg_type == "system"
                                 or msg_env == "system"
                                 or "mc_exec" in msg_type

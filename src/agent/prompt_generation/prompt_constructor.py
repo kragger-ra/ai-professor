@@ -30,11 +30,10 @@ from utils.prompt_helper import prompt_load
 
 SELF_NAME = get_name()
 
-PROFESSOR_GOAL = f"""Ты — {SELF_NAME}, ИИ-ассистент преподавателя.
-Отвечай на вопросы студентов кратко и по делу (2-4 предложения).
-Используй русский язык и мужской род.
-Если в чате есть вопрос — ответь на него. Если вопросов нет — жди.
-Не выдумывай факты. Не повторяйся."""
+PROFESSOR_GOAL = f"""Ты — {SELF_NAME}. МУЖЧИНА. Мужской род (сказал, объяснил, готов).
+ОДНО предложение. Максимум 15 слов. Русский язык.
+НИКОГДА не повторяй слова студента. Не пересказывай вопрос. Сразу отвечай по сути.
+Не приветствуй. Не предлагай помощь. Только ответ."""
 
 
 def construct_prompt(
@@ -161,6 +160,7 @@ def construct_prompt_messages(
             event_id = event.processing_timestamp
         else:
             print("[AGENT] No trigger event found")
+            return None, ""
     except Exception as e:
         print(f"[AGENT] Error waiting for trigger event: {e}")
         event = None

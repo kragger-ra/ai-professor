@@ -87,7 +87,7 @@ def main_agent_need_starting():
 
 def agent_start():
     global main_agent_need_starting
-    if ctx is not None and Supervisor.is_running() == False:
+    if Supervisor is not None and Supervisor.is_running() == False:
         print("Agent activated")
         main_agent_need_starting = lambda: True
         Supervisor.run()

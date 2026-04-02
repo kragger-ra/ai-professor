@@ -23,18 +23,15 @@ from data_schema.structure_templates import REPO_DATA_PATH
 
 class FasterWhisperSTT:
     def __init__(self, device: str = "cuda"):
-        model_hf_repo = os.getenv(
-            "FASTER_WHISPER_MODEL_NAME",
-            "dvislobokov/faster-whisper-large-v3-turbo-russian",
-        )
-        # model_dir = os.path.join(
-        #     REPO_DATA_PATH,
-        #     "speech"
-        # )
+        self.device = device
+        model_name = os.getenv("FASTER_WHISPER_MODEL_NAME", "tiny")
+        compute_type = os.getenv("STT_COMPUTE_TYPE", "float16")
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper-models")
         self.model = WhisperModel(
-            model_hf_repo,  # "base",  # model_hf_repo,
+            model_name,
             device=device,
-            # model_root=model_dir,
+            compute_type=compute_type,
+            download_root=cache_dir,
         )
 
     def pipeline(self, pcm: bytes, *args, **kwargs):
@@ -42,11 +39,16 @@ class FasterWhisperSTT:
 
         INPUT FORMAT: WAV BYTES WITH HEADING!
         """
+        beam = 1 if self.device == "cpu" else 5
         segments, info = self.model.transcribe(
             pcm,
             language="ru",
-            multilingual=True,
-            # initial_prompt="Я ОЧЕНЬ ЗОЛ! *angry*\nБраво! *claps*\nСейчас я говорю с NetTyan, автономной # нейростримершей. Мы играем в Minecraft. *serios*\nЧтобы телепортироваться на spawn, я могу # попросить её написать команду /spawn.",
+            beam_size=beam,
+            vad_filter=True,
+            vad_parameters=dict(
+                min_silence_duration_ms=500,
+                speech_pad_ms=200,
+            ),
         )
         # print(segments, info)
         got_text = "".join(segment.text for segment in segments)

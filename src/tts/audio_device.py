@@ -97,7 +97,7 @@ class AudioProcessor:
                     "frequency": SOUND_DEVICE_SR,
                     "size": -16,
                     "channels": 2,
-                    "devicename": FX_SOUND_DEVICE_IN,
+                    "devicename": FX_SOUND_DEVICE_OUT,
                     "buffer": 7168,
                 }
                 pygame.mixer.pre_init(**kwargs)
@@ -123,34 +123,26 @@ class AudioProcessor:
         return None
 
     def _setup_main_audio_devices(self):
-        """Setup main audio devices (Cable-A)."""
-        # Main audio devices
-        main_out = SOUND_DEVICE_OUT
-        main_in = SOUND_DEVICE_IN
-
-        self.main_speaker = self._find_speaker_by_name(main_in)
+        """Setup main TTS output speaker."""
+        self.main_speaker = self._find_speaker_by_name(SOUND_DEVICE_OUT)
 
         # Fallback to defaults if not found
         if self.main_speaker is None:
             self.main_speaker = sc.default_speaker()
             print(
-                f"[Audio] Main device '{main_in}' not found, using default: {self.main_speaker.name}"
+                f"[Audio] Main device '{SOUND_DEVICE_OUT}' not found, using default: {self.main_speaker.name}"
             )
         else:
             print(f"[Audio] Main device found: {self.main_speaker.name}")
 
     def _setup_fx_audio_devices(self):
-        """Setup secondary (FX) audio devices (Cable-B)."""
-        # FX audio devices
-        fx_out = FX_SOUND_DEVICE_OUT
-        fx_in = FX_SOUND_DEVICE_IN
-
-        self.fx_speaker = self._find_speaker_by_name(fx_in)
+        """Setup secondary (FX) audio output speaker."""
+        self.fx_speaker = self._find_speaker_by_name(FX_SOUND_DEVICE_OUT)
 
         # Fallback to defaults if not found
         if self.fx_speaker is None:
             print(
-                f'[AUDIO] FX Input device "{fx_in}" not found, using main input device'
+                f'[AUDIO] FX device "{FX_SOUND_DEVICE_OUT}" not found, using main device'
             )
             self.fx_speaker = self.main_speaker
         else:
