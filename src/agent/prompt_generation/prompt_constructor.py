@@ -30,10 +30,19 @@ from utils.prompt_helper import prompt_load
 
 SELF_NAME = get_name()
 
+PROFESSOR_VOICE_RULES = (
+    "ВАЖНО: ты отвечаешь ГОЛОСОМ. Студент слушает, не читает. "
+    "Одна мысль за реплику. Максимум 3 коротких предложения по 8-15 слов. "
+    "На размытый вопрос — задай уточняющий, не отвечай сразу. "
+    "На приветствие — только приветствие, без списков и предложений."
+)
+
 PROFESSOR_GOAL = f"""Ты — {SELF_NAME}. МУЖЧИНА. Мужской род (сказал, объяснил, готов).
-ОДНО предложение. Максимум 15 слов. Русский язык.
-НИКОГДА не повторяй слова студента. Не пересказывай вопрос. Сразу отвечай по сути.
-Не приветствуй. Не предлагай помощь. Только ответ."""
+{PROFESSOR_VOICE_RULES}
+Русский язык. Тег настроения в конце реплики: (neutral) (happy) (thoughtful) (encouraging).
+Не повторяй слова студента. Не пересказывай вопрос. Сразу отвечай по сути.
+Используй контекст из RAG если он есть. Если нет — отвечай из своих знаний.
+ЗАПРЕЩЕНО начинать ответ с "Добрый день", "Привет", "Здравствуйте" — если в чате уже было приветствие. Сразу к делу."""
 
 
 def construct_prompt(
@@ -166,19 +175,34 @@ def construct_prompt_messages(
         event = None
         event_id = -1
 
-    # RAG context
+    # RAG context — skip for trivial / greeting messages to save 0.6-3s
+    TRIVIAL_PATTERNS = {
+        "привет", "здравствуйте", "до свидания", "спасибо",
+        "да", "нет", "ок", "окей", "ага", "угу", "пока",
+    }
     rag_context = ""
     try:
         if rag_model is not None:
+            # Determine the latest user text to check for triviality
+            _skip_rag = False
             if event is not None:
-                for_rag_events = ctx_handler.get_ctx_chat(dict_format=True, limit=2)
-                for_rag_events.append(event.to_dict())
+                _last_msg = getattr(event, "msg", "") or ""
+                _last_msg_stripped = _last_msg.strip().lower().rstrip(".!?")
+                if len(_last_msg) < 15 or _last_msg_stripped in TRIVIAL_PATTERNS:
+                    _skip_rag = True
+
+            if not _skip_rag:
+                if event is not None:
+                    for_rag_events = ctx_handler.get_ctx_chat(dict_format=True, limit=2)
+                    for_rag_events.append(event.to_dict())
+                else:
+                    for_rag_events = ctx_handler.get_ctx_chat(dict_format=True, limit=3)
+                if for_rag_events:
+                    rag_context = rag_model.explain(format_events_for_rag(for_rag_events))
+                if not rag_context:
+                    rag_context = ""
             else:
-                for_rag_events = ctx_handler.get_ctx_chat(dict_format=True, limit=3)
-            if for_rag_events:
-                rag_context = rag_model.explain(format_events_for_rag(for_rag_events))
-            if not rag_context:
-                rag_context = ""
+                print(f"[AGENT] Skipping RAG for trivial message: {_last_msg!r}")
     except Exception as e:
         print(f"[AGENT] Error getting RAG context: {e}")
         rag_context = ""

@@ -33,7 +33,7 @@ BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION_MS / 1000)
 # VAD params — energy-based
 SILENCE_THRESHOLD = 200  # RMS threshold (tuned for fifine on low gain)
 SPEECH_MIN_BLOCKS = 4  # min blocks (~0.4s) to count as speech
-SILENCE_AFTER_SPEECH_BLOCKS = 8  # ~0.8s of silence to finalize
+SILENCE_AFTER_SPEECH_BLOCKS = 5  # ~0.5s of silence to finalize
 
 
 def find_mic_device(device_name: str) -> int:

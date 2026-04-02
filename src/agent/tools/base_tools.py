@@ -163,7 +163,19 @@ def _parse_text_tags(text: str, tag: str = "*") -> Tuple[str, List[str]]:
 
 
 def _parse_emotion(comment: str) -> tuple[str, str]:
-    """Parse emotion from comment"""
+    """Parse emotion from comment.
+
+    Supports two formats:
+    - New: (neutral) (happy) (thoughtful) (encouraging) at end of text
+    - Legacy: *emotion* anywhere in text
+    """
+    import re
+    # New format: (emotion) at end of text
+    m = re.search(r'\((?:neutral|happy|thoughtful|encouraging|sad|angry|scared|whispering|disgusted|sarcastic)\)\s*$', comment)
+    if m:
+        emotion = m.group(0).strip('() \t')
+        return emotion, comment[:m.start()].rstrip()
+    # Legacy format: *emotion*
     clean_comment, tags = _parse_text_tags(comment, tag="*")
     if tags:
         emotion = tags[-1]

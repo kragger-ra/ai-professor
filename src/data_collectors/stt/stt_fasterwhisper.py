@@ -24,7 +24,7 @@ from data_schema.structure_templates import REPO_DATA_PATH
 class FasterWhisperSTT:
     def __init__(self, device: str = "cuda"):
         self.device = device
-        model_name = os.getenv("FASTER_WHISPER_MODEL_NAME", "tiny")
+        model_name = os.getenv("FASTER_WHISPER_MODEL_NAME", "large-v3")
         compute_type = os.getenv("STT_COMPUTE_TYPE", "float16")
         cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper-models")
         self.model = WhisperModel(

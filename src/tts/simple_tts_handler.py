@@ -9,7 +9,11 @@ from config_schema.general import get_name
 from live2d.vtube_settings import Live2DConfig
 from live2d.vtube_studio import VTubeStudioIntegration
 from tts.audio_device import AudioProcessor
-from tts.fish.fish_gr import fish_tts_emo
+
+if os.getenv("TTS_BACKEND", "fish") == "piper":
+    from tts.piper.piper_tts import piper_tts_emo as fish_tts_emo
+else:
+    from tts.fish.fish_gr import fish_tts_emo
 
 # [`neutral`, `happy`, `sad`, `angry`, `scared`, `whispering`, `disgusted`, `sarcastic`]
 # from agent/tools.py

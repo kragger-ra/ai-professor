@@ -128,8 +128,8 @@ def fish_tts(text: str, ref: str, ref_text: str = ""):
             return fish_tts(text, ref, ref_text)
 
     if client is not None:
-        if text and len(text) > 300:
-            text = text[:250] + ". Устала говорить, слишком длинный текст."
+        if text and len(text) > 1000:
+            text = text[:950] + ". Текст сокращён."
             print("[FISH GR] TTS TEXT TRUNCATED!!!!! to " + text)
         audiofile = client.predict(
             text=text,
@@ -137,7 +137,7 @@ def fish_tts(text: str, ref: str, ref_text: str = ""):
             reference_audio=handle_file(ref),
             reference_text=ref_text,
             max_new_tokens=512,
-            chunk_length=200,
+            chunk_length=100,
             top_p=0.8,
             repetition_penalty=1.3,
             temperature=0.65,

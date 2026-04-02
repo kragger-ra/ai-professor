@@ -12,6 +12,7 @@ tools like !tool 123
 
 import importlib
 import os
+import re
 import sys
 import threading
 import time
@@ -36,11 +37,46 @@ from agent.prompt_generation.prompt_constructor import (
 )
 from agent.rag import RagModel
 from agent.tools import tools_config
+from agent.tools.base_tools import _parse_emotion
 from agent.tools.tool_executor import execute_tools
 from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
+from config_schema.general import get_name
 from utils.debug import bcolors
 from data_flow.ctx_handler import CtxHandler
 from utils.debug import print_messages
+
+# Regex for splitting sentences: punctuation followed by space, or newline(s)
+_SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?])\s+|\n+')
+# Minimum chars before we consider splitting a sentence off
+_MIN_SENTENCE_LEN = 20
+
+# Sentinel for stream end
+_STREAM_END = object()
+
+
+def _next_with_timeout(iterator, timeout: float):
+    """Get next item from iterator with timeout.
+    Returns _STREAM_END on StopIteration or timeout.
+    """
+    import queue
+    result_q = queue.Queue()
+
+    def _pull():
+        try:
+            result_q.put(next(iterator))
+        except StopIteration:
+            result_q.put(_STREAM_END)
+        except Exception as e:
+            result_q.put(_STREAM_END)
+
+    t = threading.Thread(target=_pull, daemon=True)
+    t.start()
+    try:
+        return result_q.get(timeout=timeout)
+    except queue.Empty:
+        print("[CORE AGENT] Stream timeout — no tokens for "
+              f"{timeout}s, treating as end of response")
+        return _STREAM_END
 
 
 class CoreAgent(BaseAgent):
@@ -123,8 +159,31 @@ class CoreAgent(BaseAgent):
         """Check if agent is running"""
         return self.running
 
+    def _flush_sentence(self, sentence: str, is_last: bool = False):
+        """Send a complete sentence to TTS queue.
+
+        For intermediate sentences, emotion is always 'neutral'.
+        For the last sentence, we parse the *emotion* tag if present.
+        """
+        sentence = sentence.strip()
+        if not sentence:
+            return
+        if is_last:
+            emotion, text = _parse_emotion(sentence)
+            if not emotion:
+                emotion = "neutral"
+        else:
+            # Strip any stray emotion tags from intermediate chunks too
+            emotion = "neutral"
+            text = sentence
+        text = text.strip()
+        if text:
+            self.ctx_swarm["tts_queue"].append(
+                {"text": text, "emotion": emotion}
+            )
+
     def step(self):
-        """Run a single iteration of the agent"""
+        """Run a single iteration of the agent with streaming TTS."""
         try:
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
@@ -145,26 +204,57 @@ class CoreAgent(BaseAgent):
                 ctx_handler=self.ctx_handler, delay=1
             )
             self.ctx_swarm["fx_queue"].put("thinking")
-            response = execute_tool_query(
-                messages,
-                should_interrupt=smart_event_waiter.check,
-                response_starting=response_starting,
-            )
-            smart_event_waiter.shutdown()
 
-            print(f"Agent response:\n---\n{response}\n---\n")
+            # --- Stream LLM, collect full response, then TTS as one piece ---
+            # Piper TTS is fast (~0.3s), so no need to split by sentence.
+            # Sending full text preserves natural prosody.
+            full_response = ""
+            interrupted = False
+            _STREAM_TIMEOUT = 5.0
+
+            stream_iter = iter(tools_config.llm_model.stream(messages))
+            while True:
+                token_result = _next_with_timeout(stream_iter, _STREAM_TIMEOUT)
+                if token_result is _STREAM_END:
+                    break
+
+                if smart_event_waiter.check():
+                    interrupted = True
+                    print("[CORE AGENT] Interrupted by new event during streaming")
+                    break
+
+                event = token_result
+                token = event.content if not isinstance(event, str) else event
+                if not token:
+                    continue
+
+                print(bcolors.OKCYAN + str(token) + bcolors.ENDC, flush=True, end="")
+                full_response += token
+
+            smart_event_waiter.shutdown()
+            print()
 
             # Send full response to TTS as single call
-            if response and isinstance(response, str) and response.strip():
-                from agent.tools.base_tools import _parse_emotion
-                emotion, text = _parse_emotion(response.strip())
-                if not emotion:
-                    emotion = "neutral"
-                text = text.strip()
-                if text:
-                    self.ctx_swarm["tts_queue"].append(
-                        {"text": text, "emotion": emotion}
-                    )
+            if full_response.strip() and not interrupted:
+                self._flush_sentence(full_response.strip(), is_last=True)
+
+            # Save professor's response to ctx_chat so the model sees its own history
+            if full_response.strip():
+                from data_schema.chat_structures import EventBase
+                from utils.time_helper import eztime
+                prof_event = EventBase(
+                    processing_timestamp=time.time_ns(),
+                    date=eztime(),
+                    env="voice",
+                    user=get_name(),
+                    type="chat",
+                    msg=full_response.strip(),
+                    filter_results={"acceptable": True},
+                )
+                prof_event["self"] = True
+                self.ctx_handler.add_message(prof_event)
+
+            print(f"Agent response:\n---\n{full_response}\n---\n")
 
         except Exception as e:
             print(f"Error running agent: {e}")
