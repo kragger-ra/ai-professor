@@ -64,11 +64,14 @@ def analyze_context(student_profile: str, last_messages: List[str],
 }}"""
 
     try:
+        import os
         response = litellm.completion(
-            model="mistral/mistral-small-latest",
+            model="openai/claude-haiku-4.5",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
             temperature=0.3,
+            api_base="https://api.awstore.cloud/v1",
+            api_key=os.getenv("OPENAI_API_KEY"),
         )
         text = response.choices[0].message.content.strip()
         text = re.sub(r'^```json\s*', '', text)

@@ -270,14 +270,70 @@ class CoreAgent(BaseAgent):
         except Exception as e:
             print(f"[META] Profile update error: {e}")
 
+    @staticmethod
+    def _to_dicts(messages) -> list:
+        """Convert langchain messages to plain dicts for litellm."""
+        result = []
+        for m in messages:
+            if isinstance(m, dict):
+                result.append(m)
+            elif hasattr(m, "type") and hasattr(m, "content"):
+                role_map = {"human": "user", "ai": "assistant", "system": "system"}
+                result.append({"role": role_map.get(m.type, "user"), "content": m.content})
+            else:
+                result.append({"role": "user", "content": str(m)})
+        return result
+
+    def _send_to_tts(self, text: str, split_sentences: bool = False):
+        """Send text to TTS queue, optionally splitting into sentences."""
+        text = self._EMOTION_PAREN_RE.sub('', text)
+        text = self._EMOTION_STAR_RE.sub('', text).strip()
+        if not text:
+            return
+        if split_sentences:
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            for s in sentences:
+                s = s.strip()
+                if s:
+                    self.ctx_swarm["tts_queue"].append({"text": s, "emotion": "neutral"})
+        else:
+            self.ctx_swarm["tts_queue"].append({"text": text, "emotion": "neutral"})
+
+    def _save_to_history(self, text: str):
+        """Save professor response to ctx_chat."""
+        clean_msg = self._EMOTION_PAREN_RE.sub('', text)
+        clean_msg = self._EMOTION_STAR_RE.sub('', clean_msg).strip()
+        if not clean_msg:
+            return
+        from data_schema.chat_structures import EventBase
+        from utils.time_helper import eztime
+        prof_event = EventBase(
+            processing_timestamp=time.time_ns(),
+            date=eztime(),
+            env="voice",
+            user=get_name(),
+            type="chat",
+            msg=clean_msg,
+            filter_results={"acceptable": True},
+        )
+        prof_event["self"] = True
+        self.ctx_handler.add_message(prof_event)
+
     def step(self):
-        """Run a single iteration of the agent with streaming TTS."""
+        """Run a single iteration of the agent with dual-brain orchestrator."""
         try:
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
 
-            # First: wait for trigger and build base prompt (no meta yet)
+            from agent.orchestrator import (
+                is_waiting_for_student, get_wait_elapsed,
+                receive_student_reply, deliver_opus_on_timeout,
+                orchestrate,
+            )
+            import random
+
+            # First: wait for trigger and build base prompt
             messages, response_starting = construct_prompt_messages(
                 get_tool_records(),
                 self.ctx_handler,
@@ -286,101 +342,86 @@ class CoreAgent(BaseAgent):
                 tool_use_format="command",
             )
             if messages is None:
+                # No trigger — but check staller timeout
+                if is_waiting_for_student() and get_wait_elapsed() > 30:
+                    print("[AGENT] Student didn't reply in 30s, delivering Opus")
+                    timeout_response = deliver_opus_on_timeout()
+                    if timeout_response:
+                        self._send_to_tts("Ладно, давай я сам объясню.", False)
+                        self._send_to_tts(timeout_response, split_sentences=True)
+                        self._save_to_history(timeout_response)
                 return
 
-            # Now trigger fired — run meta-analysis on fresh data
+            # Get latest student message
+            recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=3)
+            last_student_msg = ""
+            for m in reversed(recent):
+                if not m.get("self"):
+                    last_student_msg = m.get("msg", "")
+                    break
+
+            # Check: are we waiting for student reply to a staller question?
+            if is_waiting_for_student():
+                print(f"[AGENT] Student replied to staller: {last_student_msg[:80]}")
+                bridged = receive_student_reply(last_student_msg, self._to_dicts(messages))
+                print(f"[AGENT] Bridged response:\n---\n{bridged}\n---")
+                self._send_to_tts(bridged, split_sentences=True)
+                self._save_to_history(bridged)
+
+                # Meta-analysis + profile update
+                student_profile, meta_instruction, meta_result = self._run_meta_analysis()
+                self._update_student_profile(meta_result, bridged, last_student_msg)
+                return
+
+            # Normal flow: meta-analysis
             student_profile, meta_instruction, meta_result = self._run_meta_analysis()
 
-            # Inject student context into messages (before the last goal message)
+            # Inject student context into messages
             if student_profile or meta_instruction:
                 from langchain_core.messages import SystemMessage as _SM
-                meta_parts = []
+                parts = []
                 if student_profile:
-                    meta_parts.append(f"Профиль студента: {student_profile}")
+                    parts.append(f"Профиль студента: {student_profile}")
                 if meta_instruction:
-                    meta_parts.append(f"Стиль ответа: {meta_instruction}")
-                meta_msg = _SM(content="\n".join(meta_parts))
-                # Insert before last message (goal)
-                messages.insert(-1, meta_msg)
-            if self.ctx_swarm["env"].get("debug_print_prompt", False):
-                print("Context messages:")
-                print_messages(messages)
-            smart_event_waiter = SmartEventWaiter(
-                ctx_handler=self.ctx_handler, delay=1
-            )
+                    parts.append(f"Стиль ответа: {meta_instruction}")
+                messages.insert(-1, _SM(content="\n".join(parts)))
+
             self.ctx_swarm["fx_queue"].put("thinking")
 
-            # --- Stream LLM, collect full response, then TTS as one piece ---
-            # Piper TTS is fast (~0.3s), so no need to split by sentence.
-            # Sending full text preserves natural prosody.
-            full_response = ""
-            interrupted = False
-            _STREAM_TIMEOUT = 15.0
+            # Orchestrate: route to fast/smart model
+            result = orchestrate(
+                messages=self._to_dicts(messages),
+                student_message=last_student_msg,
+                rag_context="",  # RAG already in prompt
+                temperature=random.uniform(0.4, 0.75),
+            )
 
-            import random
-            _temperature = random.uniform(0.4, 0.75)
-            stream_iter = iter(tools_config.llm_model.stream(messages, temperature=_temperature))
-            timed_out = False
-            while True:
-                token_result = _next_with_timeout(stream_iter, _STREAM_TIMEOUT)
-                if token_result is _STREAM_END:
-                    break
-                if token_result is _STREAM_TIMEOUT_END:
-                    timed_out = True
-                    break
+            full_response = result["response"]
+            print(f"[AGENT] Model: {result['model_used']}, "
+                  f"Complexity: {result['complexity']}")
 
-                if smart_event_waiter.check():
-                    interrupted = True
-                    print("[CORE AGENT] Interrupted by new event during streaming")
-                    break
+            if result.get("filler_used"):
+                # Split on \n---\n: filler / staller / (optional main answer)
+                blocks = full_response.split("\n---\n")
+                for i, block in enumerate(blocks):
+                    block = block.strip()
+                    if not block:
+                        continue
+                    is_last = (i == len(blocks) - 1)
+                    # Last block of complex answer — split into sentences
+                    if is_last and not result.get("waiting_for_student"):
+                        self._send_to_tts(block, split_sentences=True)
+                    else:
+                        self._send_to_tts(block, split_sentences=False)
 
-                event = token_result
-                token = event.content if not isinstance(event, str) else event
-                if not token:
-                    continue
+                # Save full text to history
+                clean_full = " ".join(b.strip() for b in blocks if b.strip())
+                self._save_to_history(clean_full)
+            else:
+                self._send_to_tts(full_response, split_sentences=False)
+                self._save_to_history(full_response)
 
-                print(bcolors.OKCYAN + str(token) + bcolors.ENDC, flush=True, end="")
-                full_response += token
-
-            # Graceful truncation marker when timeout cuts mid-sentence
-            if timed_out and full_response.strip() and not full_response.rstrip().endswith(('.', '!', '?', '…')):
-                full_response += "..."
-
-            smart_event_waiter.shutdown()
-            print()
-
-            # Send full response to TTS as single call
-            if full_response.strip() and not interrupted:
-                self._flush_sentence(full_response.strip(), is_last=True)
-
-            # Save professor's response to ctx_chat so the model sees its own history
-            # Strip emotion tags from saved text so LLM context stays clean
-            if full_response.strip():
-                from data_schema.chat_structures import EventBase
-                from utils.time_helper import eztime
-                clean_msg = self._EMOTION_PAREN_RE.sub('', full_response.strip())
-                clean_msg = self._EMOTION_STAR_RE.sub('', clean_msg).strip()
-                prof_event = EventBase(
-                    processing_timestamp=time.time_ns(),
-                    date=eztime(),
-                    env="voice",
-                    user=get_name(),
-                    type="chat",
-                    msg=clean_msg,
-                    filter_results={"acceptable": True},
-                )
-                prof_event["self"] = True
-                self.ctx_handler.add_message(prof_event)
-
-                # Update student profile from meta-analysis
-                recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=2)
-                last_student_msg = ""
-                for m in reversed(recent):
-                    if not m.get("self"):
-                        last_student_msg = m.get("msg", "")
-                        break
-                self._update_student_profile(meta_result, clean_msg, last_student_msg)
-
+            self._update_student_profile(meta_result, full_response, last_student_msg)
             print(f"Agent response:\n---\n{full_response}\n---\n")
 
         except Exception as e:
