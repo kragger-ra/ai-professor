@@ -320,6 +320,19 @@ with demo:
 
         stop_agent_btn = gr.Button("Stop", variant="secondary")
         stop_agent_btn.click(fn=activate_agent)
+
+    with gr.Group():
+        gr.Markdown("### Audio Routing (VoiceMeeter)")
+        audio_status = gr.Textbox(value="—", label="Current mode", interactive=False)
+        with gr.Row():
+            zoom_btn = gr.Button("Zoom Mode", variant="primary")
+            direct_btn = gr.Button("Direct Mode", variant="secondary")
+
+        from utils.voicemeeter_control import zoom_mode, direct_mode, get_status as vm_status
+
+        zoom_btn.click(fn=zoom_mode, outputs=[audio_status])
+        direct_btn.click(fn=direct_mode, outputs=[audio_status])
+        demo.load(fn=vm_status, outputs=[audio_status])
     gr.Markdown(
         """
             # Virtual Streamer Interface
