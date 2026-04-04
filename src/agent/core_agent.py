@@ -50,13 +50,14 @@ _SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?])\s+|\n+')
 # Minimum chars before we consider splitting a sentence off
 _MIN_SENTENCE_LEN = 20
 
-# Sentinel for stream end
+# Sentinels for stream end
 _STREAM_END = object()
+_STREAM_TIMEOUT_END = object()
 
 
 def _next_with_timeout(iterator, timeout: float):
     """Get next item from iterator with timeout.
-    Returns _STREAM_END on StopIteration or timeout.
+    Returns _STREAM_END on StopIteration, _STREAM_TIMEOUT_END on timeout.
     """
     import queue
     result_q = queue.Queue()
@@ -76,7 +77,7 @@ def _next_with_timeout(iterator, timeout: float):
     except queue.Empty:
         print("[CORE AGENT] Stream timeout — no tokens for "
               f"{timeout}s, treating as end of response")
-        return _STREAM_END
+        return _STREAM_TIMEOUT_END
 
 
 class CoreAgent(BaseAgent):
@@ -159,6 +160,16 @@ class CoreAgent(BaseAgent):
         """Check if agent is running"""
         return self.running
 
+    # Regex to strip all emotion tags before sending to TTS
+    _EMOTION_PAREN_RE = re.compile(
+        r'\s*\((?:neutral|happy|thoughtful|encouraging|sad|angry|scared|whispering|disgusted|sarcastic)\)',
+        re.IGNORECASE,
+    )
+    _EMOTION_STAR_RE = re.compile(
+        r'\s*\*(?:neutral|happy|thoughtful|encouraging|sad|angry|scared|whispering|disgusted|sarcastic)\*',
+        re.IGNORECASE,
+    )
+
     def _flush_sentence(self, sentence: str, is_last: bool = False):
         """Send a complete sentence to TTS queue.
 
@@ -176,6 +187,9 @@ class CoreAgent(BaseAgent):
             # Strip any stray emotion tags from intermediate chunks too
             emotion = "neutral"
             text = sentence
+        # Safety net: strip ALL remaining emotion tags before TTS
+        text = self._EMOTION_PAREN_RE.sub('', text)
+        text = self._EMOTION_STAR_RE.sub('', text)
         text = text.strip()
         if text:
             self.ctx_swarm["tts_queue"].append(
@@ -210,12 +224,16 @@ class CoreAgent(BaseAgent):
             # Sending full text preserves natural prosody.
             full_response = ""
             interrupted = False
-            _STREAM_TIMEOUT = 5.0
+            _STREAM_TIMEOUT = 10.0
 
             stream_iter = iter(tools_config.llm_model.stream(messages))
+            timed_out = False
             while True:
                 token_result = _next_with_timeout(stream_iter, _STREAM_TIMEOUT)
                 if token_result is _STREAM_END:
+                    break
+                if token_result is _STREAM_TIMEOUT_END:
+                    timed_out = True
                     break
 
                 if smart_event_waiter.check():
@@ -231,6 +249,10 @@ class CoreAgent(BaseAgent):
                 print(bcolors.OKCYAN + str(token) + bcolors.ENDC, flush=True, end="")
                 full_response += token
 
+            # Graceful truncation marker when timeout cuts mid-sentence
+            if timed_out and full_response.strip() and not full_response.rstrip().endswith(('.', '!', '?', '…')):
+                full_response += "..."
+
             smart_event_waiter.shutdown()
             print()
 
@@ -239,16 +261,19 @@ class CoreAgent(BaseAgent):
                 self._flush_sentence(full_response.strip(), is_last=True)
 
             # Save professor's response to ctx_chat so the model sees its own history
+            # Strip emotion tags from saved text so LLM context stays clean
             if full_response.strip():
                 from data_schema.chat_structures import EventBase
                 from utils.time_helper import eztime
+                clean_msg = self._EMOTION_PAREN_RE.sub('', full_response.strip())
+                clean_msg = self._EMOTION_STAR_RE.sub('', clean_msg).strip()
                 prof_event = EventBase(
                     processing_timestamp=time.time_ns(),
                     date=eztime(),
                     env="voice",
                     user=get_name(),
                     type="chat",
-                    msg=full_response.strip(),
+                    msg=clean_msg,
                     filter_results={"acceptable": True},
                 )
                 prof_event["self"] = True

@@ -736,6 +736,7 @@ def format_events_with_roles(
                 ev_type == "tool_call"
                 and event.get("user", "") == self_name
                 or ev_type == "OVERRIDE_ASSISTANT_ROLE"
+                or event.get("self", False)
             ):
                 role = "assistant"
             else:
