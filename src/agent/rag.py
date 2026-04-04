@@ -38,13 +38,44 @@ class CustomTripleNewLineSplitter(TextSplitter):
         super().__init__(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     def split_text(self, text: str) -> list[str]:
-        # Split only on exact \n\n\n
+        # Split on exact \n\n\n first
         chunks = text.split(self.separator)
         if len(chunks) > 0 and len(chunks[-1].split("\n")) > 0:
             if chunks[-1].split("\n")[0].strip() == "Источники:":
                 chunks = chunks[:-1]
-        # Filter out empty chunks and strip whitespace
-        return [chunk.strip() for chunk in chunks if chunk.strip()]
+        # Fallback: if a chunk is too large, split on \n\n (markdown sections)
+        # Then merge adjacent small chunks to avoid embedding noise
+        _MIN_CHUNK = 50  # chars — merge headers / tiny fragments into neighbours
+        raw = []
+        for chunk in chunks:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if len(chunk) > self._chunk_size:
+                sub_chunks = chunk.split("\n\n")
+                raw.extend(s.strip() for s in sub_chunks if s.strip())
+            else:
+                raw.append(chunk)
+        # Merge small chunks into their neighbour to avoid tiny fragments
+        result = []
+        buf = ""
+        for part in raw:
+            if len(part) < _MIN_CHUNK:
+                # Small chunk — prepend to buffer, will merge with next
+                buf = (buf + "\n\n" + part).strip() if buf else part
+            else:
+                if buf:
+                    # Merge buffered small chunks with this larger chunk
+                    part = buf + "\n\n" + part
+                    buf = ""
+                result.append(part)
+        if buf:
+            # Trailing small chunks — append to last result or keep standalone
+            if result:
+                result[-1] = result[-1] + "\n\n" + buf
+            else:
+                result.append(buf)
+        return result
 
 
 class CustomDirectoryLoader:

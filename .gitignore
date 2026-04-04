@@ -200,3 +200,8 @@ uv.lock
 #mkdocs
 
 docs/site
+
+# Lecture audio (too large for git)
+lectures/
+lectures_16k/
+*.wav
