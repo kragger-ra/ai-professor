@@ -97,6 +97,9 @@ class CustomDirectoryLoader:
         docs = []
         for kind in self.doc_kinds:
             path = os.path.join(self.dir, kind)
+            if not os.path.isdir(path):
+                print(f"[RAG Loader] Skipping missing directory: {path}")
+                continue
             for file_glob in ("*.txt", "*.md"):
                 loader = DirectoryLoader(
                     path,
