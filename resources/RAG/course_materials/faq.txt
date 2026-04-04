@@ -1,0 +1,43 @@
+Часто задаваемые вопросы (FAQ)
+
+
+В: Как запустить FishTTS?
+О: Выполните команду: cd docker/filter && docker-compose -f docker-compose-tts.yml up --build
+FishTTS запустится на порту 22231.
+
+
+В: Как переключить TTS между Piper и FishTTS?
+О: В файле .env измените TTS_BACKEND="piper" на TTS_BACKEND="fish" или наоборот. Перезапустите программу.
+
+
+В: Как настроить микрофон?
+О: В .env укажите SOUND_DEVICE_IN="имя_вашего_микрофона". Узнать имя можно командой: python -c "import soundcard; print([m.name for m in soundcard.all_microphones()])"
+
+
+В: Как настроить вывод звука?
+О: В .env укажите SOUND_DEVICE_OUT="имя_устройства". Для работы через VoiceMeeter: SOUND_DEVICE_OUT="Voicemeeter Input (VB-Audio Voicemeeter VAIO)"
+
+
+В: Что делать если STT не распознаёт речь?
+О: Проверьте что CUDA установлена, CuDNN добавлен в PATH, и в .env указан STT_COMPUTE_DEVICE="cuda". Без CUDA модель будет работать на CPU, но медленнее.
+
+
+В: Что такое RAG?
+О: RAG (Retrieval-Augmented Generation) — это подход, при котором языковая модель сначала ищет релевантную информацию в базе знаний, а затем использует найденное для формирования ответа. Это позволяет отвечать на вопросы по конкретным материалам курса.
+
+
+В: Что такое embeddings?
+О: Embeddings — это числовые представления текста в виде векторов. Похожие по смыслу тексты имеют близкие векторы. Используются в RAG для поиска релевантных фрагментов базы знаний.
+
+
+В: Как добавить материалы в базу знаний RAG?
+О: Положите текстовые файлы (.txt или .md) в папку resources/RAG/course_materials/ и удалите папку data/rag_vector_store/. При следующем запуске индекс пересоберётся.
+
+
+В: Где лежат промпты профессора?
+О: В файле resources/Prompts/personalities_professor.yml. Там три версии: professor_default (основная), professor_concise (краткая), professor_clarifying (уточняющая).
+
+
+В: Как запустить программу?
+О: Активируйте venv, затем: set PYTHONPATH=src && python src/main.py --offline --no-filter
+Флаг --offline отключает Twitch/YouTube, --no-filter отключает систему фильтрации.

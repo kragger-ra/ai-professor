@@ -1,0 +1,45 @@
+Архитектура AI Professor (PersonaLab Workshop)
+
+
+Полный голосовой пайплайн:
+Микрофон → STT (faster-whisper large-v3, CUDA) → RAG (FAISS + Mistral embeddings) → LLM (Mistral Large) → TTS (Piper denis-medium, CPU) → VoiceMeeter → наушники/Zoom
+
+
+Компоненты:
+- STT: распознавание речи студентов, модель Whisper large-v3 на GPU
+- LLM: генерация ответов, Mistral Large через API
+- TTS: синтез речи, Piper TTS на CPU, голос "Денис"
+- RAG: поиск по материалам курса, FAISS + Mistral embeddings
+- Gradio UI: веб-интерфейс на порту 22228
+
+
+Курс PersonaLab Workshop:
+- 8-недельный воркшоп по созданию цифровых персонажей
+- Технологии: LLM, TTS, STT, Live2D, RAG, Docker
+- Проект NetTyan: автономный ИИ-стример, база для агента-преподавателя
+- Платформа: ИТМО AI Talent Hub
+
+
+RAG (Retrieval-Augmented Generation):
+- Механизм дополнения ответов LLM информацией из внешней базы знаний
+- Текст разбивается на чанки, каждый чанк превращается в вектор (embedding)
+- При вопросе студента: вопрос превращается в вектор, ищутся ближайшие чанки
+- Найденные чанки подставляются в контекст LLM как дополнительная информация
+
+
+TTS (Text-to-Speech):
+- Piper TTS: быстрый CPU-синтезатор, модель denis-medium, русский язык
+- FishTTS: GPU-синтезатор с клонированием голоса, Docker на порту 22231
+- Переключение через .env: TTS_BACKEND="piper" или TTS_BACKEND="fish"
+
+
+STT (Speech-to-Text):
+- faster-whisper large-v3 на CUDA
+- VAD (Voice Activity Detection): порог тишины 0.5 секунды
+- Поддержка русского языка
+
+
+Docker:
+- FishTTS: docker-compose -f docker/filter/docker-compose-tts.yml up
+- Порт 22231 для FishTTS WebUI
+- Требования: 4GB+ VRAM для GPU-режима

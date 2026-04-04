@@ -66,23 +66,20 @@ class CustomDirectoryLoader:
         docs = []
         for kind in self.doc_kinds:
             path = os.path.join(self.dir, kind)
-            if text_splitter is None:
-                tmp = DirectoryLoader(
+            for file_glob in ("*.txt", "*.md"):
+                loader = DirectoryLoader(
                     path,
-                    glob="*.txt",
+                    glob=file_glob,
                     loader_cls=TextLoader,
                     loader_kwargs={"encoding": "utf-8"},
-                ).load()
-            else:
-                tmp = DirectoryLoader(
-                    path,
-                    glob="*.txt",
-                    loader_cls=TextLoader,
-                    loader_kwargs={"encoding": "utf-8"},
-                ).load_and_split(text_splitter=text_splitter)
-            for doc in tmp:
-                doc.metadata = {"kind": kind, **doc.metadata}
-            docs.extend(tmp)
+                )
+                if text_splitter is None:
+                    tmp = loader.load()
+                else:
+                    tmp = loader.load_and_split(text_splitter=text_splitter)
+                for doc in tmp:
+                    doc.metadata = {"kind": kind, **doc.metadata}
+                docs.extend(tmp)
         return docs
 
 
