@@ -235,7 +235,7 @@ class CoreAgent(BaseAgent):
 
             # Meta-agent analysis
             meta_result = analyze_context(student_profile_text, last_messages, current_msg)
-            meta_instruction = build_meta_instruction(meta_result)
+            meta_instruction = build_meta_instruction(meta_result, student_known=bool(self._current_student))
         except Exception as e:
             print(f"[META] Error: {e}")
             traceback.print_exc()

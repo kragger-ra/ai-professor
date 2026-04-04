@@ -90,9 +90,12 @@ def analyze_context(student_profile: str, last_messages: List[str],
         }
 
 
-def build_meta_instruction(meta: dict) -> str:
+def build_meta_instruction(meta: dict, student_known: bool = True) -> str:
     """Build a style instruction string from meta-analysis result."""
     parts = [meta.get("style_instruction", "")]
+
+    if not student_known:
+        parts.append("Студент не представился. Попроси назвать имя и рассказать о себе, потом ответь на вопрос.")
 
     if meta.get("is_off_topic"):
         parts.append("Студент ушёл от темы. Коротко поддержи и верни к материалу курса.")
