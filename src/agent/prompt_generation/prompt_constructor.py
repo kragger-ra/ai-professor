@@ -32,8 +32,7 @@ SELF_NAME = get_name()
 
 PROFESSOR_VOICE_RULES = (
     "Ты отвечаешь ГОЛОСОМ. Студент слушает, не читает. "
-    "Одна мысль за реплику. 2-3 коротких предложения. "
-    "На приветствие — только приветствие. "
+    "Варьируй длину ответов. Не заканчивай каждую реплику вопросом. "
     "Тег эмоции в конце — не произносить вслух."
 )
 
@@ -48,8 +47,10 @@ PROFESSOR_GOAL = f"""Ты — {SELF_NAME}. МУЖЧИНА. Мужской род
 def construct_prompt(
     rag_context: Optional[str],
     ctx_swarm: dict,
+    student_profile: str = "",
+    meta_instruction: str = "",
 ) -> str:
-    """Build system prompt from personality template + RAG context."""
+    """Build system prompt from personality template + RAG + student context."""
     personality_key = ctx_swarm["states"].get("personality", "professor_default")
     personality_file = "personalities_professor" if "professor" in personality_key else "personalities"
     system_template = prompt_load(personality_file, personality_key)
@@ -57,7 +58,13 @@ def construct_prompt(
     final_rag_context = (
         "\n\n## Контекст из материалов курса:\n" + rag_context if rag_context else ""
     )
-    return system_template + final_rag_context
+    student_section = (
+        "\n\n## Профиль студента:\n" + student_profile if student_profile else ""
+    )
+    meta_section = (
+        "\n\n## Стиль текущего ответа:\n" + meta_instruction if meta_instruction else ""
+    )
+    return system_template + final_rag_context + student_section + meta_section
 
 
 def create_chat_from_prompt(prompt: str, role: str = "system") -> List[Dict]:
@@ -128,6 +135,8 @@ def construct_prompt_messages(
     goal: str = None,
     unfinished_response: str = "",
     response_starting: str = "",
+    student_profile: str = "",
+    meta_instruction: str = "",
 ) -> Tuple[Union[List[BaseMessage], List[Dict], str], str]:
     """
     Constructs prompt messages for the professor agent.
@@ -218,6 +227,8 @@ def construct_prompt_messages(
     prompt = construct_prompt(
         rag_context,
         ctx_swarm=ctx_handler.ctx_swarm,
+        student_profile=student_profile,
+        meta_instruction=meta_instruction,
     )
 
     if goal is None:

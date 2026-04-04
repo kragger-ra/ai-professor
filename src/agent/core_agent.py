@@ -37,7 +37,9 @@ from agent.prompt_generation.prompt_constructor import (
 )
 from agent.rag import RagModel
 from agent.tools import tools_config
+from agent.meta_agent import analyze_context, build_meta_instruction, extract_student_info
 from agent.tools.base_tools import _parse_emotion
+from lecture.student_profiles import StudentProfileManager
 from agent.tools.tool_executor import execute_tools
 from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
 from config_schema.general import get_name
@@ -106,6 +108,15 @@ class CoreAgent(BaseAgent):
             traceback.print_exc()
             self.rag_model = None
             print("[CoreAgent] Continuing without RAG model, setting it to None.")
+
+        # Student profiles
+        try:
+            self._profile_mgr = StudentProfileManager()
+            print("[CoreAgent] StudentProfileManager initialized")
+        except Exception as e:
+            print(f"[CoreAgent] StudentProfileManager error: {e}")
+            self._profile_mgr = None
+        self._current_student = None
 
         if tool_bank is not None:
             self.tool_bank = tool_bank
@@ -196,18 +207,87 @@ class CoreAgent(BaseAgent):
                 {"text": text, "emotion": emotion}
             )
 
+    def _run_meta_analysis(self) -> tuple:
+        """Run meta-agent analysis on latest message. Returns (student_profile, meta_instruction, meta_result)."""
+        student_profile_text = ""
+        meta_instruction = ""
+        meta_result = {}
+
+        if self._profile_mgr is None:
+            return student_profile_text, meta_instruction, meta_result
+
+        try:
+            # Get recent messages for context
+            recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=6)
+            last_messages = [m.get("msg", "") for m in recent if m.get("msg")]
+            current_msg = last_messages[-1] if last_messages else ""
+
+            # Try to extract student name from latest message
+            info = extract_student_info(current_msg)
+            if info and info.get("name"):
+                self._current_student = info["name"]
+                if info.get("background"):
+                    self._profile_mgr.update_profile(info["name"], {"background": info["background"]})
+
+            # Build student profile text
+            if self._current_student:
+                student_profile_text = self._profile_mgr.get_profile_for_prompt(self._current_student)
+
+            # Meta-agent analysis
+            meta_result = analyze_context(student_profile_text, last_messages, current_msg)
+            meta_instruction = build_meta_instruction(meta_result)
+        except Exception as e:
+            print(f"[META] Error: {e}")
+            traceback.print_exc()
+
+        return student_profile_text, meta_instruction, meta_result
+
+    def _update_student_profile(self, meta_result: dict, agent_response: str, student_msg: str):
+        """Apply profile updates from meta-analysis after response."""
+        if not self._profile_mgr or not self._current_student or not meta_result:
+            return
+        try:
+            updates = meta_result.get("profile_updates", {})
+            if updates.get("add_topic"):
+                self._profile_mgr.append_to_list_field(self._current_student, "topics_of_interest", updates["add_topic"])
+            if updates.get("add_issue"):
+                self._profile_mgr.append_to_list_field(self._current_student, "known_issues", updates["add_issue"])
+            if updates.get("communication_note"):
+                self._profile_mgr.update_profile(self._current_student, {"personality_notes": updates["communication_note"]})
+            if updates.get("background_info"):
+                self._profile_mgr.update_profile(self._current_student, {"background": updates["background_info"]})
+            delta = updates.get("tech_level_delta", 0)
+            if delta and delta != 0:
+                student = self._profile_mgr.get_or_create_student(self._current_student)
+                new_level = max(1, min(5, student["tech_level"] + delta))
+                self._profile_mgr.update_profile(self._current_student, {"tech_level": new_level})
+
+            # Log interaction
+            self._profile_mgr.log_interaction(
+                self._current_student, student_msg, agent_response,
+                meta_analysis=str(meta_result), emotion=meta_result.get("mood", "neutral"),
+            )
+        except Exception as e:
+            print(f"[META] Profile update error: {e}")
+
     def step(self):
         """Run a single iteration of the agent with streaming TTS."""
         try:
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
+
+            # Meta-analysis: student profile + style instruction
+            student_profile, meta_instruction, meta_result = self._run_meta_analysis()
+
             messages, response_starting = construct_prompt_messages(
                 get_tool_records(),
                 self.ctx_handler,
                 rag_model=self.rag_model,
                 output_format="langchain",
                 tool_use_format="command",
+                student_profile=student_profile,
+                meta_instruction=meta_instruction,
             )
             if messages is None:
                 return
@@ -226,7 +306,9 @@ class CoreAgent(BaseAgent):
             interrupted = False
             _STREAM_TIMEOUT = 15.0
 
-            stream_iter = iter(tools_config.llm_model.stream(messages))
+            import random
+            _temperature = random.uniform(0.4, 0.75)
+            stream_iter = iter(tools_config.llm_model.stream(messages, temperature=_temperature))
             timed_out = False
             while True:
                 token_result = _next_with_timeout(stream_iter, _STREAM_TIMEOUT)
@@ -278,6 +360,15 @@ class CoreAgent(BaseAgent):
                 )
                 prof_event["self"] = True
                 self.ctx_handler.add_message(prof_event)
+
+                # Update student profile from meta-analysis
+                recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=2)
+                last_student_msg = ""
+                for m in reversed(recent):
+                    if not m.get("self"):
+                        last_student_msg = m.get("msg", "")
+                        break
+                self._update_student_profile(meta_result, clean_msg, last_student_msg)
 
             print(f"Agent response:\n---\n{full_response}\n---\n")
 
