@@ -327,12 +327,25 @@ with demo:
         with gr.Row():
             zoom_btn = gr.Button("Zoom Mode", variant="primary")
             direct_btn = gr.Button("Direct Mode", variant="secondary")
+            release_btn = gr.Button("Release Audio", variant="stop")
 
-        from utils.voicemeeter_control import zoom_mode, direct_mode, get_status as vm_status
+        from utils.voicemeeter_control import (
+            zoom_mode, direct_mode, release_audio, get_status as vm_status,
+        )
 
         zoom_btn.click(fn=zoom_mode, outputs=[audio_status])
         direct_btn.click(fn=direct_mode, outputs=[audio_status])
+        release_btn.click(fn=release_audio, outputs=[audio_status])
         demo.load(fn=vm_status, outputs=[audio_status])
+
+    with gr.Group():
+        def _exit_all():
+            release_audio()
+            stop_system()
+            return "Exiting..."
+
+        exit_btn = gr.Button("EXIT (Release Audio + Shutdown)", variant="stop")
+        exit_btn.click(fn=_exit_all)
     gr.Markdown(
         """
             # Virtual Streamer Interface

@@ -90,6 +90,39 @@ def get_status() -> str:
         return "ERROR"
 
 
+def release_audio() -> str:
+    """Release all VoiceMeeter routing and shutdown VoiceMeeter engine.
+
+    Mutes all strips, resets bus assignments so Windows returns to
+    default audio devices without VoiceMeeter holding exclusive locks.
+    """
+    vm = _get_vm()
+    if vm is None:
+        return "VoiceMeeter not available"
+    try:
+        # Mute all strips so nothing routes through VoiceMeeter
+        for i in range(5):
+            vm.strip[i].mute = True
+            vm.strip[i].A1 = False
+            vm.strip[i].B1 = False
+            vm.strip[i].B2 = False
+
+        # Mute all buses
+        for i in range(5):
+            vm.bus[i].mute = True
+
+        # Shutdown VoiceMeeter engine to release exclusive device locks
+        vm.command.shutdown()
+
+        print("[VoiceMeeter] RELEASED: all strips/buses muted, engine shutdown")
+        cleanup()
+        return "Audio RELEASED"
+    except Exception as e:
+        traceback.print_exc()
+        cleanup()
+        return f"Released with errors: {e}"
+
+
 def cleanup():
     """Logout from VoiceMeeter API."""
     global _vm
