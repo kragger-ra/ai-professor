@@ -17,7 +17,7 @@ else:
 
 # [`neutral`, `happy`, `sad`, `angry`, `scared`, `whispering`, `disgusted`, `sarcastic`]
 # from agent/tools.py
-MAX_AUDIO_ALLOWED_TIME = 20  # TODO untested
+MAX_AUDIO_ALLOWED_TIME = 60  # seconds per TTS utterance
 
 SPELL_TO_EMOTION = {
     "sadistic": "sarcastic",

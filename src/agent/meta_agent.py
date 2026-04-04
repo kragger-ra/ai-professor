@@ -107,6 +107,6 @@ def build_meta_instruction(meta: dict, student_known: bool = True) -> str:
             parts.append("Студент пошутил. Коротко посмейся и верни к теме.")
 
     if meta.get("request_type") == "знакомство":
-        parts.append("Студент представляется. Запомни имя и детали. Поприветствуй тепло.")
+        parts.append("Студент представляется. Поприветствуй ОДНИМ коротким предложением и жди вопрос. НЕ начинай объяснять что-либо сам.")
 
     return " ".join(p for p in parts if p)
