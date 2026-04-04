@@ -143,20 +143,24 @@ TTS можно ставить 2 способами - ПРОСТОЙ (завис�
 ### 4.1 Простой способ для TTS
 
 ```bash
-uv sync --group simpletts
+uv pip install --group simpletts
 ```
 
 ### 5. Ставим STT
 
-Если нет CUDA может ругаться, но работать на CPU.
-
-Если есть CUDA, обязательно исполняем команду:
+Если нет CUDA может ругаться, но работать на CPU. Если есть CUDA, обязательно исполняем команду:
 
 ```bash
-uv pip install onnxruntime-gpu>=1.23.0
+uv pip install --group gpu
 ```
 
-Не забудьте при настройке `.env` указать STT_COMPUTE_DEVICE=CUDA если идёте по CUDA-треку, изначально там CPU.
+Ставим STT:
+
+```bash
+uv pip install --group stt
+```
+
+Не забудьте при настройке `.env` указать STT_COMPUTE_DEVICE=CUDA если идёте по CUDA-треку, т.к. изначально там CPU. P.S. настройка `.env` будет ДАЛЕЕ на этапе CONFIGURE.
 
 Перед этим для pydub понадобится **ffmpeg**:
 
