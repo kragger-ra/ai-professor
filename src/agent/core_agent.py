@@ -224,7 +224,7 @@ class CoreAgent(BaseAgent):
             # Sending full text preserves natural prosody.
             full_response = ""
             interrupted = False
-            _STREAM_TIMEOUT = 10.0
+            _STREAM_TIMEOUT = 15.0
 
             stream_iter = iter(tools_config.llm_model.stream(messages))
             timed_out = False
