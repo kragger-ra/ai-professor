@@ -294,18 +294,18 @@ def format_ctx_chat(ctx_compatible, isCtxChat=True):
 def save_ctx_chat_to_json(ctx_compatible):
     ctx_chat_save_dir = os.path.join(REPO_DATA_PATH, "debug")
     os.makedirs(ctx_chat_save_dir, exist_ok=True)
-    with open(
-        os.path.join(ctx_chat_save_dir, "ctx_chat.json"), "w", encoding="utf-8"
-    ) as f:
-        json.dump(
-            list(ctx_compatible),
-            f,
-            ensure_ascii=False,
-            indent=4,
-            sort_keys=True,
-            default=str,
-        )
-    print("Json CTX COMPATIBLE saved to " + ctx_chat_save_dir)
+    save_path = os.path.join(ctx_chat_save_dir, "ctx_chat.json")
+    try:
+        data = list(ctx_compatible)
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4, sort_keys=True, default=str)
+        msg = f"Saved {len(data)} events to {save_path}"
+        print(msg)
+        return msg
+    except Exception as e:
+        msg = f"Save error: {e}"
+        print(msg)
+        return msg
 
 
 def print_ctx_chat(ctx_compatible):
@@ -429,7 +429,8 @@ with demo:
                 ctx_submit_btn.click(
                     fn=lambda: format_ctx_chat(ctx_chat), outputs=[ctx_chat_output]
                 )
-                ctx_save_btn.click(fn=lambda: save_ctx_chat_to_json(ctx_chat))
+                save_status = gr.Textbox(visible=False)
+                ctx_save_btn.click(fn=lambda: save_ctx_chat_to_json(ctx_chat), outputs=[save_status])
                 ctx_print_btn.click(fn=lambda: print_ctx_chat(ctx_chat))
 
             with gr.Row():

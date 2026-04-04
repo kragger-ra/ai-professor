@@ -135,8 +135,6 @@ def construct_prompt_messages(
     goal: str = None,
     unfinished_response: str = "",
     response_starting: str = "",
-    student_profile: str = "",
-    meta_instruction: str = "",
 ) -> Tuple[Union[List[BaseMessage], List[Dict], str], str]:
     """
     Constructs prompt messages for the professor agent.
@@ -227,8 +225,6 @@ def construct_prompt_messages(
     prompt = construct_prompt(
         rag_context,
         ctx_swarm=ctx_handler.ctx_swarm,
-        student_profile=student_profile,
-        meta_instruction=meta_instruction,
     )
 
     if goal is None:

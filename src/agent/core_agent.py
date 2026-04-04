@@ -277,20 +277,31 @@ class CoreAgent(BaseAgent):
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
 
-            # Meta-analysis: student profile + style instruction
-            student_profile, meta_instruction, meta_result = self._run_meta_analysis()
-
+            # First: wait for trigger and build base prompt (no meta yet)
             messages, response_starting = construct_prompt_messages(
                 get_tool_records(),
                 self.ctx_handler,
                 rag_model=self.rag_model,
                 output_format="langchain",
                 tool_use_format="command",
-                student_profile=student_profile,
-                meta_instruction=meta_instruction,
             )
             if messages is None:
                 return
+
+            # Now trigger fired — run meta-analysis on fresh data
+            student_profile, meta_instruction, meta_result = self._run_meta_analysis()
+
+            # Inject student context into messages (before the last goal message)
+            if student_profile or meta_instruction:
+                from langchain_core.messages import SystemMessage as _SM
+                meta_parts = []
+                if student_profile:
+                    meta_parts.append(f"Профиль студента: {student_profile}")
+                if meta_instruction:
+                    meta_parts.append(f"Стиль ответа: {meta_instruction}")
+                meta_msg = _SM(content="\n".join(meta_parts))
+                # Insert before last message (goal)
+                messages.insert(-1, meta_msg)
             if self.ctx_swarm["env"].get("debug_print_prompt", False):
                 print("Context messages:")
                 print_messages(messages)
