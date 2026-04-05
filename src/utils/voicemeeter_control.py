@@ -1,11 +1,16 @@
 """VoiceMeeter Banana audio routing for AI Professor.
 
-Two modes:
-  ZOOM:   TTS → VoiceMeeter VAIO → A1 (headphones) + B1 (Zoom mic)
-          Zoom speaker → VB-Cable → Strip 0 → A1 (monitor) + B2 (STT)
+Three modes:
+  ZOOM:    TTS -> VoiceMeeter VAIO -> A1 (headphones) + B1 (Zoom mic)
+           Zoom speaker -> VB-Cable -> Strip 0 -> A1 (monitor) + B2 (STT)
 
-  DIRECT: TTS → VoiceMeeter VAIO → A1 (headphones only)
-          Strip 0 B2 off (STT uses fifine mic directly)
+  DIRECT:  TTS -> VoiceMeeter VAIO -> A1 (headphones only)
+           Strip 0 B2 off (STT uses fifine mic directly)
+
+  RELEASE: Mute all, shutdown engine, return devices to Windows.
+
+IMPORTANT: zoom_mode() and direct_mode() always unmute the relevant
+strips and buses, so they work correctly even after a release_audio().
 """
 
 import traceback
@@ -26,12 +31,48 @@ def _get_vm():
     return _vm
 
 
+def _ensure_engine_running(vm):
+    """Restart VoiceMeeter audio engine if it was shut down.
+
+    After release_audio() calls vm.command.shutdown(), the process stays
+    alive but the engine is dead. We must restart it before changing routing.
+    """
+    import time
+    try:
+        vm.command.restart()
+        time.sleep(5)  # engine needs ~5s to reinitialize audio devices
+    except Exception:
+        pass  # restart may fail if engine is already running — that's fine
+
+
+def _unmute_core(vm):
+    """Unmute the strips and buses used by AI Professor.
+
+    Strip 0: VB-Cable (Zoom audio input)
+    Strip 3: VAIO (TTS output)
+    Bus A1 (index 0): headphones / monitor
+    Bus B1 (index 3): Zoom mic output
+    Bus B2 (index 4): STT device output
+    """
+    # Unmute active strips
+    vm.strip[0].mute = False
+    vm.strip[3].mute = False
+    # Unmute output buses
+    vm.bus[0].mute = False   # A1 — headphones
+    vm.bus[3].mute = False   # B1 — Zoom mic
+    vm.bus[4].mute = False   # B2 — STT
+
+
 def zoom_mode() -> str:
-    """Enable Zoom routing: TTS→Zoom, Zoom→STT."""
+    """Enable Zoom routing: TTS->Zoom, Zoom->STT."""
     vm = _get_vm()
     if vm is None:
         return "VoiceMeeter not available"
     try:
+        # Restart engine if it was shut down, then unmute
+        _ensure_engine_running(vm)
+        _unmute_core(vm)
+
         # Strip 0 (VB-Cable / Zoom audio): route to A1 (monitor) + B2 (STT)
         vm.strip[0].A1 = True
         vm.strip[0].B1 = False
@@ -55,6 +96,10 @@ def direct_mode() -> str:
     if vm is None:
         return "VoiceMeeter not available"
     try:
+        # Restart engine if it was shut down, then unmute
+        _ensure_engine_running(vm)
+        _unmute_core(vm)
+
         # Strip 0 (VB-Cable): A1 only, no B2 (STT won't get Zoom audio)
         vm.strip[0].A1 = True
         vm.strip[0].B1 = False
@@ -78,8 +123,8 @@ def get_status() -> str:
     if vm is None:
         return "VoiceMeeter N/A"
     try:
-        zoom_stt = vm.strip[0].B2   # Zoom audio → STT
-        zoom_tts = vm.strip[3].B1   # TTS → Zoom mic
+        zoom_stt = vm.strip[0].B2   # Zoom audio -> STT
+        zoom_tts = vm.strip[3].B1   # TTS -> Zoom mic
         if zoom_stt and zoom_tts:
             return "ZOOM"
         elif not zoom_stt and not zoom_tts:

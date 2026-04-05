@@ -182,6 +182,7 @@ def _transcribe_and_send(
         user=user,
         type="chat",
         msg=text,
+        filter_results={"acceptable": True},
     )
     ctx_handler.add_message(event)
 
