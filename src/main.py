@@ -59,13 +59,11 @@ import pandas as pd  # 0.5s to import
 
 _log_timing("pandas imported")
 from config_schema.general import get_name, get_secret
-from data_flow.filter_client import ctx_filter_handler
 from data_schema.structure_templates import (
     CTX_SWARM_EMPTY,
     REPO_DATA_PATH,
     REPO_RESOURCE_PATH,
 )
-from front.hud_layer import HudLayerHandler
 
 _log_timing("Front imported")
 from tts.simple_tts_handler import simple_tts_handler  # 0.7s to import
@@ -703,26 +701,8 @@ def main():
         )
     ctx_handler = CtxHandler(ctx_swarm)
     # ctx_swarm["fx_queue"].put("starting")
-    textSubtitlesHttp = manager.Value("u", "")
-    TextDisplaySpeed = manager.Value("u", "fast")
-    RefreshInterval = manager.Value("i", 3)
-    screenPrintMas = manager.list()
-    _log_timing("Starting HttpProc (HudLayerHandler) process")
-    HttpProc = Process(
-        target=HudLayerHandler,
-        args=(
-            ctx,
-            ctx_swarm,
-            textSubtitlesHttp,
-            TextDisplaySpeed,
-            RefreshInterval,
-            screenPrintMas,
-        ),
-    )  # Thread(target = a, kwargs={'c':True}).start()
-
-    HttpProc.start()
-    processes.append(HttpProc)
-    _log_timing("HttpProc started")
+    # HudLayerHandler (OBS overlay) — REMOVED: not needed for professor
+    # FILTER_Proc (Twitch toxicity filter) — REMOVED: students are trusted
 
     _log_timing("Starting TTS_Proc process")
     TTS_Proc = Process(
@@ -732,17 +712,6 @@ def main():
     TTS_Proc.start()
     processes.append(TTS_Proc)
     _log_timing("TTS_Proc started")
-    if args.no_filter:
-        print("[main.py] NO_FILTER = True")
-        ctx_swarm["env"]["filter_enabled"] = False
-    _log_timing("Starting FILTER_Proc process")
-    FILTER_Proc = Process(
-        target=ctx_filter_handler,
-        args=(ctx_swarm,),
-    )
-    FILTER_Proc.start()
-    processes.append(FILTER_Proc)
-    _log_timing("FILTER_Proc started")
 
     DO_BLOCK = True
     _log_timing(

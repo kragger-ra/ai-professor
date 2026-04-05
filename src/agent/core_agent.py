@@ -320,20 +320,20 @@ class CoreAgent(BaseAgent):
         self.ctx_handler.add_message(prof_event)
 
     def step(self):
-        """Run a single iteration of the agent with dual-brain orchestrator."""
+        """Run a single iteration: wait for trigger → stream LLM → sentence TTS.
+
+        Architecture v2: no classification step, direct streaming from Mistral.
+        Meta-analysis runs AFTER response in background thread.
+        """
         try:
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
 
-            from agent.orchestrator import (
-                is_waiting_for_student, get_wait_elapsed,
-                receive_student_reply, deliver_opus_on_timeout,
-                orchestrate,
-            )
             import random
+            from agent.streaming_orchestrator import stream_response_sentences
 
-            # First: wait for trigger and build base prompt
+            # 1. Wait for trigger and build prompt (includes RAG)
             messages, response_starting = construct_prompt_messages(
                 get_tool_records(),
                 self.ctx_handler,
@@ -342,17 +342,9 @@ class CoreAgent(BaseAgent):
                 tool_use_format="command",
             )
             if messages is None:
-                # No trigger — but check staller timeout
-                if is_waiting_for_student() and get_wait_elapsed() > 30:
-                    print("[AGENT] Student didn't reply in 30s, delivering Opus")
-                    timeout_response = deliver_opus_on_timeout()
-                    if timeout_response:
-                        self._send_to_tts("Ладно, давай я сам объясню.", False)
-                        self._send_to_tts(timeout_response, split_sentences=True)
-                        self._save_to_history(timeout_response)
                 return
 
-            # Get latest student message
+            # 2. Get latest student message
             recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=3)
             last_student_msg = ""
             for m in reversed(recent):
@@ -360,69 +352,54 @@ class CoreAgent(BaseAgent):
                     last_student_msg = m.get("msg", "")
                     break
 
-            # Check: are we waiting for student reply to a staller question?
-            if is_waiting_for_student():
-                print(f"[AGENT] Student replied to staller: {last_student_msg[:80]}")
-                bridged = receive_student_reply(last_student_msg, self._to_dicts(messages))
-                print(f"[AGENT] Bridged response:\n---\n{bridged}\n---")
-                self._send_to_tts(bridged, split_sentences=True)
-                self._save_to_history(bridged)
-
-                # Meta-analysis + profile update
-                student_profile, meta_instruction, meta_result = self._run_meta_analysis()
-                self._update_student_profile(meta_result, bridged, last_student_msg)
-                return
-
-            # Normal flow: meta-analysis
-            student_profile, meta_instruction, meta_result = self._run_meta_analysis()
-
-            # Inject student context into messages
-            if student_profile or meta_instruction:
-                from langchain_core.messages import SystemMessage as _SM
-                parts = []
-                if student_profile:
-                    parts.append(f"Профиль студента: {student_profile}")
-                if meta_instruction:
-                    parts.append(f"Стиль ответа: {meta_instruction}")
-                messages.insert(-1, _SM(content="\n".join(parts)))
+            # 3. Inject cached student profile (from last meta-analysis)
+            if self._current_student and self._profile_mgr:
+                profile_text = self._profile_mgr.get_profile_for_prompt(self._current_student)
+                if profile_text:
+                    from langchain_core.messages import SystemMessage as _SM
+                    messages.insert(-1, _SM(content=f"Профиль студента: {profile_text}"))
 
             self.ctx_swarm["fx_queue"].put("thinking")
 
-            # Orchestrate: route to fast/smart model
-            result = orchestrate(
-                messages=self._to_dicts(messages),
-                student_message=last_student_msg,
-                rag_context="",  # RAG already in prompt
+            # 4. STREAM response — sentences go to TTS as they arrive
+            t0 = time.perf_counter()
+            messages_dicts = self._to_dicts(messages)
+            full_response = ""
+            sentence_count = 0
+
+            for sentence in stream_response_sentences(
+                messages_dicts,
                 temperature=random.uniform(0.4, 0.75),
-            )
+                max_tokens=500,
+            ):
+                sentence_count += 1
+                full_response += sentence + " "
 
-            full_response = result["response"]
-            print(f"[AGENT] Model: {result['model_used']}, "
-                  f"Complexity: {result['complexity']}")
+                # Push each sentence to TTS immediately
+                self._send_to_tts(sentence, split_sentences=False)
 
-            if result.get("filler_used"):
-                # Split on \n---\n: filler / staller / (optional main answer)
-                blocks = full_response.split("\n---\n")
-                for i, block in enumerate(blocks):
-                    block = block.strip()
-                    if not block:
-                        continue
-                    is_last = (i == len(blocks) - 1)
-                    # Last block of complex answer — split into sentences
-                    if is_last and not result.get("waiting_for_student"):
-                        self._send_to_tts(block, split_sentences=True)
-                    else:
-                        self._send_to_tts(block, split_sentences=False)
+                elapsed = (time.perf_counter() - t0) * 1000
+                print(f"[AGENT] sentence #{sentence_count} ({elapsed:.0f}ms): "
+                      f"'{sentence[:60]}'")
 
-                # Save full text to history
-                clean_full = " ".join(b.strip() for b in blocks if b.strip())
-                self._save_to_history(clean_full)
-            else:
-                self._send_to_tts(full_response, split_sentences=False)
+            elapsed = (time.perf_counter() - t0) * 1000
+            print(f"[AGENT] Streaming done: {sentence_count} sentences, "
+                  f"{elapsed:.0f}ms, {len(full_response)} chars")
+
+            # 5. Save full response to history
+            full_response = full_response.strip()
+            if full_response:
                 self._save_to_history(full_response)
 
-            self._update_student_profile(meta_result, full_response, last_student_msg)
-            print(f"Agent response:\n---\n{full_response}\n---\n")
+            # 6. Meta-analysis + profile update in BACKGROUND (non-blocking)
+            def _post_response():
+                try:
+                    _, _, meta_result = self._run_meta_analysis()
+                    self._update_student_profile(meta_result, full_response, last_student_msg)
+                except Exception as e:
+                    print(f"[META BG] Error: {e}")
+
+            threading.Thread(target=_post_response, daemon=True).start()
 
         except Exception as e:
             print(f"Error running agent: {e}")

@@ -58,9 +58,9 @@ class FilterClient:
             logger.error(f"Filter request failed: {e}")
 
             return {
-                "acceptable": False,
-                "reason": "FILTER_ERROR",
-                "judge": True,
+                "acceptable": True,
+                "reason": "FILTER_UNAVAILABLE",
+                "judge": False,
                 "topics": [],
                 "score": 0.0,
                 "filtered_text": text,
