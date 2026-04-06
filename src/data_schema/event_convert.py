@@ -2,6 +2,7 @@ import time
 from typing import Dict, Union
 
 from agent.tools.tool_executor import format_tool_command
+from config_schema.general import get_name
 from data_schema.chat_structures import CtxEventBase, ToolCall
 from utils.time_helper import eztime
 
@@ -55,7 +56,7 @@ def convert_tool_call_to_event(
     # action = AutoGPTAction(name=tool_name, args=args)
     return CtxEventBase(
         msg=None,  # format_action_for_display(action),
-        user="NetTyan",
+        user=get_name(),
         date=eztime(),
         processing_timestamp=time.time_ns(),
         type="tool_call",
@@ -139,7 +140,7 @@ def convert_autogpt_action_to_event(action: ToolCall) -> CtxEventBase:
     if action.name == "thoughts":
         return CtxEventBase(
             msg=display_msg,
-            user="NetTyan",
+            user=get_name(),
             env="system",
             date=eztime(),
             processing_timestamp=time.time_ns(),
@@ -155,7 +156,7 @@ def convert_autogpt_action_to_event(action: ToolCall) -> CtxEventBase:
     # For other tool actions
     return CtxEventBase(
         msg=display_msg,
-        user="NetTyan",
+        user=get_name(),
         date=eztime(),
         processing_timestamp=time.time_ns(),
         type="tool_call",

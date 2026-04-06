@@ -174,28 +174,40 @@ def construct_prompt_messages(
         if event:
             print(f"[AGENT] Triggered by event: {event}")
             event_id = event.processing_timestamp
+
+
+
         else:
-            print("[AGENT] No trigger event found")
-            return None, ""
+            if wait_for_trigger:
+                print("[AGENT] No trigger event found")
+                return None, ""
+            print("[AGENT] Building prompt without trigger (post-interrupt)")
     except Exception as e:
         print(f"[AGENT] Error waiting for trigger event: {e}")
         event = None
         event_id = -1
 
     # RAG context — skip for trivial / greeting messages to save 0.6-3s
-    TRIVIAL_PATTERNS = {
+    TRIVIAL_EXACT = {
         "привет", "здравствуйте", "до свидания", "спасибо",
         "да", "нет", "ок", "окей", "ага", "угу", "пока",
     }
+    TRIVIAL_CONTAINS = [
+        "добрый день", "добрый вечер", "доброе утро", "добрый",
+        "как дела", "как ваши дела", "как у вас дела",
+        "вы меня слышите", "меня слышно", "ты меня слышишь",
+        "привет", "здравствуйте", "здорово",
+    ]
     rag_context = ""
     try:
         if rag_model is not None:
-            # Determine the latest user text to check for triviality
             _skip_rag = False
             if event is not None:
                 _last_msg = getattr(event, "msg", "") or ""
                 _last_msg_stripped = _last_msg.strip().lower().rstrip(".!?")
-                if len(_last_msg) < 15 or _last_msg_stripped in TRIVIAL_PATTERNS:
+                if len(_last_msg) < 15 or _last_msg_stripped in TRIVIAL_EXACT:
+                    _skip_rag = True
+                elif any(p in _last_msg_stripped for p in TRIVIAL_CONTAINS):
                     _skip_rag = True
 
             if not _skip_rag:

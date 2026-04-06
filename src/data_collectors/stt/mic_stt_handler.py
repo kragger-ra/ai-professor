@@ -33,7 +33,7 @@ BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION_MS / 1000)
 # VAD params — energy-based
 SILENCE_THRESHOLD = 200  # RMS threshold (tuned for fifine on low gain)
 SPEECH_MIN_BLOCKS = 4  # min blocks (~0.4s) to count as speech
-SILENCE_AFTER_SPEECH_BLOCKS = 5  # ~0.5s of silence to finalize
+SILENCE_AFTER_SPEECH_BLOCKS = 10  # ~1.0s of silence to finalize (was 5/0.5s)
 
 
 def find_mic_device(device_name: str) -> int:
@@ -170,7 +170,23 @@ def _transcribe_and_send(
         print("[MIC-STT] Empty result, skipping")
         return
 
+    # STT corrections: common misrecognitions in course context
+    import re as _re
+    _STT_FIXES = [
+        (_re.compile(r'\bрак\b', _re.IGNORECASE), 'RAG'),
+        (_re.compile(r'\bРГ\b'), 'RAG'),
+    ]
+    for pattern, replacement in _STT_FIXES:
+        text = pattern.sub(replacement, text)
+
     _stt_log(f"[MIC-STT] >>> {text}")
+
+    # Interrupt TTS when real speech is recognized (not noise)
+    if ctx_swarm["voice"]["is_speaking"]:
+        tts_q = ctx_swarm["tts_queue"]
+        tts_q[:] = []
+        tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+        _stt_log("[MIC-STT] Interrupted TTS — student said something")
 
     user = ctx_swarm["game"].get("last_talking_player", "Student")
     if not user:

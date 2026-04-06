@@ -24,7 +24,8 @@ SMART_MODEL_API_KEY = os.getenv("OPENAI_API_KEY", "")
 # =========================================================================
 
 # Sentence endings: .!? followed by space or end of string
-_SENTENCE_END_RE = re.compile(r'([.!?])(?:\s+|$)')
+# Sentence end: .!? followed by space, but NOT after a digit (e.g. "1." "2.")
+_SENTENCE_END_RE = re.compile(r'(?<!\d)([.!?])(?:\s+|$)')
 # Word count threshold: flush even without punctuation
 _MAX_WORDS_NO_PUNCT = 20
 
@@ -95,9 +96,8 @@ class SentenceBuffer:
 # Streaming LLM call
 # =========================================================================
 
-def stream_fast(messages: list, temperature: float = 0.6,
-                max_tokens: int = 500) -> Generator[str, None, None]:
-    """Stream tokens from fast model. Yields individual tokens as strings."""
+def _stream_to_queue(messages, temperature, max_tokens, q):
+    """Run litellm streaming in a thread, push tokens to queue."""
     try:
         response = litellm.completion(
             model=FAST_MODEL,
@@ -105,14 +105,42 @@ def stream_fast(messages: list, temperature: float = 0.6,
             max_tokens=max_tokens,
             temperature=temperature,
             stream=True,
+            timeout=15,
         )
         for chunk in response:
             delta = chunk.choices[0].delta
             if delta and delta.content:
-                yield delta.content
+                q.put(delta.content)
+        q.put(None)  # signal end
     except Exception as e:
-        print(f"[STREAM] Error: {e}")
-        yield ""
+        print(f"[STREAM] Error in thread: {e}")
+        q.put(None)
+
+
+def stream_fast(messages: list, temperature: float = 0.6,
+                max_tokens: int = 500) -> Generator[str, None, None]:
+    """Stream tokens from fast model with hard timeout per chunk."""
+    import queue
+    print(f"[STREAM] Calling {FAST_MODEL}, max_tokens={max_tokens}")
+
+    q = queue.Queue()
+    t = threading.Thread(
+        target=_stream_to_queue,
+        args=(messages, temperature, max_tokens, q),
+        daemon=True,
+    )
+    t.start()
+
+    while True:
+        try:
+            token = q.get(timeout=10)  # 10s hard timeout per chunk
+        except queue.Empty:
+            print("[STREAM] Timeout: no tokens for 10s, aborting")
+            break
+        if token is None:
+            print("[STREAM] Stream finished normally")
+            break
+        yield token
 
 
 def stream_response_sentences(messages: list, temperature: float = 0.6,

@@ -472,11 +472,12 @@ with demo:
                     tts_queue_input = gr.Textbox(
                         value="Привет всем!", label="tts queue input"
                     )
-                    from tts.simple_tts_handler import EMOTION_TO_COMMAND
-
+                    _EMOTIONS = [
+                        "neutral", "happy", "sad", "angry",
+                        "scared", "whispering", "disgusted", "sarcastic",
+                    ]
                     tts_queue_emo = gr.Dropdown(
-                        choices=list(EMOTION_TO_COMMAND.keys())
-                        + ["interrupt"],
+                        choices=_EMOTIONS + ["interrupt"],
                         label="tts queue emotion",
                         allow_custom_value=True,
                     )
@@ -701,9 +702,6 @@ def main():
         )
     ctx_handler = CtxHandler(ctx_swarm)
     # ctx_swarm["fx_queue"].put("starting")
-    # HudLayerHandler (OBS overlay) — REMOVED: not needed for professor
-    # FILTER_Proc (Twitch toxicity filter) — REMOVED: students are trusted
-
     _log_timing("Starting TTS_Proc process")
     TTS_Proc = Process(
         target=simple_tts_handler,

@@ -11,15 +11,11 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 # TOOLS CONFIG SHOULD BE FIRST!!!
 from agent.tools import tools_config
 from agent.tools.base_tools import (
-    chat_simple,
     clear_queue,
     interrupt_chat,
     interrupt_voice,
-    mc_send,
-    private_messages,
     save_user_info,
     speak,
-    voice_send,
     wait,
 )
 from agent.tools.control_tools import (
@@ -76,10 +72,6 @@ ALL_TOOLS = [
     save_user_info,
     speak,
     wait,
-    voice_send,
-    mc_send,
-    chat_simple,
-    private_messages,
     clear_queue,
     screenshot,
     # dialogue_tools
@@ -144,11 +136,6 @@ DEFAULT_DISABLED_TOOLS = [
     # temporally disable
     interrupt_chat,
     interrupt_voice,
-    # inner queue tools
-    voice_send,
-    mc_send,
-    chat_simple,
-    private_messages,
     clear_queue,
 ]
 

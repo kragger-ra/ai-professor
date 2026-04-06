@@ -117,6 +117,7 @@ class CoreAgent(BaseAgent):
             print(f"[CoreAgent] StudentProfileManager error: {e}")
             self._profile_mgr = None
         self._current_student = None
+        self._interrupted = False
 
         if tool_bank is not None:
             self.tool_bank = tool_bank
@@ -217,10 +218,19 @@ class CoreAgent(BaseAgent):
             return student_profile_text, meta_instruction, meta_result
 
         try:
-            # Get recent messages for context
+            # Get recent messages for context (with role labels)
             recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=6)
-            last_messages = [m.get("msg", "") for m in recent if m.get("msg")]
-            current_msg = last_messages[-1] if last_messages else ""
+            last_messages = []
+            current_msg = ""
+            for m in recent:
+                msg = m.get("msg", "")
+                if not msg:
+                    continue
+                is_self = m.get("self", False)
+                role = "Профессор" if is_self else "Студент"
+                last_messages.append(f"{role}: {msg}")
+                if not is_self:
+                    current_msg = msg  # last student message
 
             # Try to extract student name from latest message
             info = extract_student_info(current_msg)
@@ -284,10 +294,27 @@ class CoreAgent(BaseAgent):
                 result.append({"role": "user", "content": str(m)})
         return result
 
+    # Strip all *markup* tags (e.g. *(пауза)*, *смеётся*, *вздыхает*)
+    _STAR_TAG_RE = re.compile(r'\*[^*]+\*')
+
+    @staticmethod
+    def _stretch_ellipsis(text: str) -> str:
+        """Convert '...' to stretched last letter for natural TTS.
+        'Хм...' → 'Хмммм.' | 'Хотя...' → 'Хотяяя.'
+        """
+        def _stretch(m):
+            before = m.group(1)
+            if before:
+                return before + before[-1] * 3 + "."
+            return "..."
+        return re.sub(r'(\S)\.{3}', _stretch, text)
+
     def _send_to_tts(self, text: str, split_sentences: bool = False):
         """Send text to TTS queue, optionally splitting into sentences."""
         text = self._EMOTION_PAREN_RE.sub('', text)
-        text = self._EMOTION_STAR_RE.sub('', text).strip()
+        text = self._EMOTION_STAR_RE.sub('', text)
+        text = self._STAR_TAG_RE.sub('', text)
+        text = self._stretch_ellipsis(text).strip()
         if not text:
             return
         if split_sentences:
@@ -334,15 +361,29 @@ class CoreAgent(BaseAgent):
             from agent.streaming_orchestrator import stream_response_sentences
 
             # 1. Wait for trigger and build prompt (includes RAG)
+            # After interrupt: skip wait_for_trigger, use latest message
+            _wait = not self._interrupted
+            self._interrupted = False
+            if not _wait:
+                time.sleep(1.0)  # brief pause for STT to finish
+                print("[AGENT] Re-entering after interrupt (no wait)")
             messages, response_starting = construct_prompt_messages(
                 get_tool_records(),
                 self.ctx_handler,
                 rag_model=self.rag_model,
                 output_format="langchain",
                 tool_use_format="command",
+                wait_for_trigger=_wait,
             )
             if messages is None:
                 return
+
+            # Interrupt: new trigger arrived — stop any ongoing TTS playback
+            tts_q = self.ctx_swarm["tts_queue"]
+            if len(tts_q) > 0:
+                tts_q[:] = []
+            tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+            print("[AGENT] Cleared TTS queue for new response")
 
             # 2. Get latest student message
             recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=3)
@@ -351,6 +392,15 @@ class CoreAgent(BaseAgent):
                 if not m.get("self"):
                     last_student_msg = m.get("msg", "")
                     break
+
+            # 2.5 Stop commands: don't generate, just acknowledge and wait
+            _stop_words = ["стоп", "подождите", "помолчите", "секунду", "погодите", "хватит", "тихо"]
+            _msg_lower = last_student_msg.lower()
+            if any(w in _msg_lower for w in _stop_words) and len(last_student_msg) < 50:
+                print(f"[AGENT] Stop command detected: '{last_student_msg}'")
+                self.ctx_swarm["tts_queue"].append({"text": "Хорошо, слушаю.", "emotion": "neutral"})
+                self._save_to_history("Хорошо, слушаю.")
+                return
 
             # 3. Inject cached student profile (from last meta-analysis)
             if self._current_student and self._profile_mgr:
@@ -362,18 +412,33 @@ class CoreAgent(BaseAgent):
             self.ctx_swarm["fx_queue"].put("thinking")
 
             # 4. STREAM response — sentences go to TTS as they arrive
+            # Short messages get fewer tokens to prevent hallucination dumps
+            _max_tokens = 150 if len(last_student_msg) < 25 else 500
             t0 = time.perf_counter()
             messages_dicts = self._to_dicts(messages)
-            full_response = ""
+            print(f"[AGENT] Starting LLM stream (max_tokens={_max_tokens}, "
+                  f"msg='{last_student_msg[:50]}')")
+            spoken_sentences = []   # sentences actually sent to TTS
             sentence_count = 0
+            _chat_len_before = len(self.ctx_handler.ctx_chat)
+            interrupted = False
 
             for sentence in stream_response_sentences(
                 messages_dicts,
                 temperature=random.uniform(0.4, 0.75),
-                max_tokens=500,
+                max_tokens=_max_tokens,
             ):
+                # Check if student interrupted (new message in ctx_chat)
+                if len(self.ctx_handler.ctx_chat) > _chat_len_before:
+                    print(f"[AGENT] Student interrupted — stopping generation")
+                    interrupted = True
+                    tts_q = self.ctx_swarm["tts_queue"]
+                    tts_q[:] = []
+                    tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+                    break
+
                 sentence_count += 1
-                full_response += sentence + " "
+                spoken_sentences.append(sentence)
 
                 # Push each sentence to TTS immediately
                 self._send_to_tts(sentence, split_sentences=False)
@@ -383,23 +448,38 @@ class CoreAgent(BaseAgent):
                       f"'{sentence[:60]}'")
 
             elapsed = (time.perf_counter() - t0) * 1000
-            print(f"[AGENT] Streaming done: {sentence_count} sentences, "
-                  f"{elapsed:.0f}ms, {len(full_response)} chars")
+            spoken_text = " ".join(spoken_sentences).strip()
 
-            # 5. Save full response to history
-            full_response = full_response.strip()
-            if full_response:
-                self._save_to_history(full_response)
+            if interrupted:
+                print(f"[AGENT] Interrupted after {sentence_count} sentences, "
+                      f"{elapsed:.0f}ms, spoken: '{spoken_text[:80]}'")
+                # Save what was actually spoken + mark as interrupted
+                if spoken_text:
+                    self._save_to_history(spoken_text + " [прервано студентом]")
+            else:
+                print(f"[AGENT] Streaming done: {sentence_count} sentences, "
+                      f"{elapsed:.0f}ms, {len(spoken_text)} chars")
+                if spoken_text:
+                    self._save_to_history(spoken_text)
 
-            # 6. Meta-analysis + profile update in BACKGROUND (non-blocking)
-            def _post_response():
-                try:
-                    _, _, meta_result = self._run_meta_analysis()
-                    self._update_student_profile(meta_result, full_response, last_student_msg)
-                except Exception as e:
-                    print(f"[META BG] Error: {e}")
+            # 6. Meta-analysis — only if NOT interrupted and no meta already running
+            if not interrupted and not getattr(self, '_meta_running', False):
+                _spoken = spoken_text
+                _student_msg = last_student_msg
+                self._meta_running = True
+                def _post_response():
+                    try:
+                        _, _, meta_result = self._run_meta_analysis()
+                        self._update_student_profile(meta_result, _spoken, _student_msg)
+                    except Exception as e:
+                        print(f"[META BG] Error: {e}")
+                    finally:
+                        self._meta_running = False
+                threading.Thread(target=_post_response, daemon=True).start()
 
-            threading.Thread(target=_post_response, daemon=True).start()
+            # 7. If interrupted — flag for immediate re-run (skip wait_for_sync)
+            if interrupted:
+                self._interrupted = True
 
         except Exception as e:
             print(f"Error running agent: {e}")

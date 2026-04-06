@@ -158,73 +158,6 @@ def translit(x: str) -> str:
     return result
 
 
-def mc_chat_fix_old_translit(inp: str) -> str:
-    """
-    Prepares the input string for chat printing by removing restricted characters,
-    transliterating, and ensuring a minimum length.
-
-    Args:
-        inp (str): The input string to be prepared.
-
-    Returns:
-        str: The prepared string ready for chat printing.
-    """
-    restrictedChars = """\n\r|!'=#".,-/\\&^%$#@{}[]()*"""
-    for char in restrictedChars:
-        inp = inp.replace(char, " ")
-    inp = translit(cut_spaces(inp))
-    if len(inp) < 2:
-        inp = inp + "лол"
-    return inp
-
-
-def mc_chat_fix(text: str) -> str:
-    """
-    Clean text to only allow Russian and English characters.
-
-    Args:
-        text (str): Input text to clean
-
-    Returns:
-        str: Cleaned text with only Russian and English characters
-    """
-    # Russian: А-Я, а-я (Unicode: 0410-042F, 0430-044F)
-    # English: A-Z, a-z
-    pattern = r"[^а-яА-Яa-zA-Z0-9ё ]"
-    text = re.sub(pattern, " ", text)
-    english_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-    digits = set("1234567890")
-    char_num = 0
-    digit_num = 0
-    text_before = ""
-    text_after = ""
-    for char in text:
-        if char in english_chars:
-            char_num += 1
-        if char in digits:
-            digit_num += 1
-            if digit_num > 5:
-                continue  # TODO add logic digits transliterate
-        if char_num <= 5:
-            text_before += char
-        else:
-            text_after += char
-
-    return cut_spaces(text_before + translit(text_after))
-
-
-def prepare_mc_chat_send(message: str, max_length=80) -> list[str]:
-    if len(message) > 0:
-        if message[0] in ["@", "/", "#"]:  # minecraft commands processing
-            return [message]
-        return [  # temporal fix TODO make workaround for bedwars detecting
-            str(mc_chat_fix(msg))  # str("!" + mc_chat_fix(msg))
-            for msg in smart_sentence_split(message, max_length=max_length)
-        ]
-    else:
-        return []
-
-
 def smart_sentence_split(
     text: str, max_length: int = 60, min_divide_length: int = 8
 ) -> list[str]:
@@ -319,13 +252,6 @@ def check(condition, message):
 
 
 if __name__ == "__main__":
-
-    print(
-        mc_chat_fix("Hilло Мир 1235646457 ! dfsdkjg чем-нибудь!Лёха!")
-    )  # Returns "HelloМир"
-    print(mc_chat_fix("Test@#$%^&"))  # Returns "Test"
-    print(mc_chat_fix("ПРИВЕТ123ABC"))  # Returns "ПРИВЕТABC"
-
     nrr = NonRepeatRandom()
 
     print("Random selection test:")
@@ -376,8 +302,3 @@ if __name__ == "__main__":
     )
 
     print("\nAll tests completed!")
-    print(
-        prepare_mc_chat_send(
-            "Hello, my name is Alex! Как дела хахахХАХАХхах ты хто такой я тя не звал заХВАХХА, авлоыпро чо по чом ыы -а-выа выца"
-        )
-    )

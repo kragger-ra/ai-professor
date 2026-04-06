@@ -1,10 +1,11 @@
+import concurrent.futures
 import logging
 import os
 import random
 import time
 import traceback
 from threading import Thread
-from typing import Optional
+from typing import Optional, Tuple
 
 from tts.audio_device import AudioProcessor
 
@@ -85,10 +86,9 @@ def check_tts_queue(
                     if check_interrupt:
                         return False
 
-                    # Vosk: sentence-level streaming
+                    # Vosk: queue-level prefetch streaming
                     if _TTS_BACKEND == "vosk":
-                        tts_dict = tts_queue.pop(0)
-                        _handle_vosk_streaming(audio_processor, ctx_swarm, tts_dict)
+                        _handle_vosk_queue_stream(audio_processor, ctx_swarm)
                         if check_interrupt:
                             return False
                         return None
@@ -119,85 +119,92 @@ def check_tts_queue(
 # Vosk streaming: sentence-by-sentence synthesis + playback
 # =========================================================================
 
-def _handle_vosk_streaming(audio_processor, ctx_swarm, tts_dict):
-    """Synthesize and play text sentence-by-sentence for minimal latency.
+def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
+    """Drain tts_queue with prefetch: synthesize next item while current plays.
 
-    Flow per sentence:
-      1. Check phrase cache -> instant if hit
-      2. Send to Vosk server -> synthesize
-      3. Post-process audio (compression + normalization)
-      4. Play (blocking per sentence, with interrupt support)
-      5. Micro-pause (150-250ms silence)
+    Instead of processing one queue item at a time (with synthesis gap between),
+    this keeps draining the queue and pre-synthesizing the next sentence
+    during playback of the current one — near-zero gap.
     """
-    text = tts_dict.get("text", "")
-    if not text.strip():
-        return
-
     tts_queue = ctx_swarm["tts_queue"]
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    prefetch_future = None
+    total_t0 = time.perf_counter()
+    played = 0
 
-    # Queue overflow protection: if >10 items queued, student lost context
-    if len(tts_queue) > 10:
-        overflow_count = len(tts_queue) - 3
-        overflow_texts = [tts_queue[i].get("text", "")[:60] for i in range(overflow_count)]
-        for _ in range(overflow_count):
-            tts_queue.pop(0)
-        log.warning(f"[TTS] Queue overflow! Dropped {overflow_count} items: {overflow_texts}")
-
-    # Split into sentences
-    sentences = split_sentences(text)
-    if not sentences:
-        return
-
-    log.info(f"[TTS] Streaming {len(sentences)} sentence(s): '{text[:80]}...'")
-
-    ctx_swarm["voice"]["speak_entry"] = tts_dict
-    ctx_swarm["voice"]["text_chunk"] = text
     ctx_swarm["voice"]["is_speaking"] = True
 
-    total_t0 = time.perf_counter()
+    # Queue overflow protection
+    if len(tts_queue) > 10:
+        overflow_count = len(tts_queue) - 3
+        for _ in range(overflow_count):
+            tts_queue.pop(0)
+        log.warning(f"[TTS] Queue overflow! Dropped {overflow_count} items")
 
-    for i, sentence in enumerate(sentences):
-        # Check interrupt between sentences
-        if _check_for_interrupt(tts_queue):
-            log.info("[TTS] Interrupted between sentences")
+    while len(tts_queue) > 0:
+        tts_dict = tts_queue.pop(0)
+        if _is_interrupt(tts_dict):
             audio_processor.interrupt_main_device()
+            if prefetch_future:
+                prefetch_future.cancel()
+                prefetch_future = None
             break
 
-        sent_t0 = time.perf_counter()
-
-        # Synthesize (checks cache internally)
-        audio, sr = vosk_tts_sentence(sentence)
-
-        if len(audio) == 0:
+        text = tts_dict.get("text", "").strip()
+        if not text:
             continue
 
-        synth_ms = (time.perf_counter() - sent_t0) * 1000
-        audio_dur = len(audio) / sr
+        sentences = split_sentences(text)
 
-        # Safety: skip fragments longer than max allowed
-        if audio_dur > MAX_AUDIO_ALLOWED_TIME:
-            log.warning(f"[TTS] Sentence too long ({audio_dur:.1f}s), skipping")
-            continue
+        for si, sentence in enumerate(sentences):
+            if _check_for_interrupt(tts_queue):
+                audio_processor.interrupt_main_device()
+                if prefetch_future:
+                    prefetch_future.cancel()
+                    prefetch_future = None
+                break
 
-        # Anomaly detection
-        if synth_ms > 1000:
-            log.warning(f"[TTS] Slow synth: {synth_ms:.0f}ms for '{sentence[:50]}'")
+            # Get audio: from prefetch or synthesize now
+            if prefetch_future is not None:
+                audio, sr = prefetch_future.result()
+                prefetch_future = None
+            else:
+                audio, sr = vosk_tts_sentence(sentence)
 
-        # Play (blocking — wait for this sentence to finish)
-        audio_processor.play_sound(audio, sr, blocking=True)
+            if len(audio) == 0:
+                continue
 
-        log.info(
-            f"[TTS] [{i+1}/{len(sentences)}] synth: {synth_ms:.0f}ms | "
-            f"audio: {audio_dur:.1f}s | '{sentence[:40]}'"
-        )
+            audio_dur = len(audio) / sr
+            if audio_dur > MAX_AUDIO_ALLOWED_TIME:
+                continue
 
-        # Micro-pause between sentences (not after the last one)
-        if i < len(sentences) - 1:
-            pause = random.uniform(0.15, 0.25)
-            time.sleep(pause)
+            # Prefetch: look ahead — next sentence in this text, or next queue item
+            next_to_prefetch = None
+            if si + 1 < len(sentences):
+                next_to_prefetch = sentences[si + 1]
+            elif len(tts_queue) > 0:
+                peek = tts_queue[0]
+                if not _is_interrupt(peek):
+                    peek_text = peek.get("text", "").strip()
+                    if peek_text:
+                        peek_sents = split_sentences(peek_text)
+                        if peek_sents:
+                            next_to_prefetch = peek_sents[0]
 
+            if next_to_prefetch and prefetch_future is None:
+                prefetch_future = executor.submit(vosk_tts_sentence, next_to_prefetch)
+
+            # Play (blocking)
+            audio_processor.play_sound(audio, sr, blocking=True)
+            played += 1
+
+            log.info(f"[TTS] #{played} audio: {audio_dur:.1f}s | '{sentence[:50]}'")
+
+    ctx_swarm["voice"]["is_speaking"] = False
+    ctx_swarm["voice"]["text_chunk"] = ""
+    executor.shutdown(wait=False)
     total_ms = (time.perf_counter() - total_t0) * 1000
-    log.info(f"[TTS] Streaming complete: {total_ms:.0f}ms total for {len(sentences)} sentences")
+    log.info(f"[TTS] Queue drained: {played} sentences, {total_ms:.0f}ms total")
 
     ctx_swarm["voice"]["is_speaking"] = False
     ctx_swarm["voice"]["text_chunk"] = ""

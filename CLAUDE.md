@@ -3,7 +3,7 @@
 ## Что это
 
 ИИ-агент-преподаватель для 8-недельного воркшопа по созданию цифровых персонажей.
-Форк NetTyan, адаптированный под образовательный контекст (Zoom-лекции, RAG по курсу, конспектирование).
+Форк NetTyan, адаптированный под образовательный контекст (голосовой диалог, RAG по курсу).
 
 - **Платформа:** ИТМО AI Talent Hub / PersonaLab
 - **Трек ВКР:** Образовательный
@@ -14,6 +14,7 @@
 cp .env.example .env
 # Заполнить API ключи и настройки аудио в .env
 pip install -e .
+# Запустить Vosk TTS сервер (отдельный проект)
 python src/main.py
 ```
 
@@ -22,65 +23,68 @@ python src/main.py
 ```
 src/
   main.py                  # точка входа (Gradio UI + multiprocessing)
-  agent/                   # CoreAgent, RAG, промпты, инструменты
-  lecture/                 # НОВЫЕ модули: wake_word, transcript_buffer, summarizer
-  metrics/                 # НОВЫЙ: SQLite логирование взаимодействий
-  data_flow/               # ctx_handler, ctx_host (из NetTyan)
-  data_collectors/stt/     # STT через faster-whisper
-  live2d/                  # VTube Studio интеграция
-  tts/                     # FishTTS
+  agent/                   # CoreAgent, streaming_orchestrator, RAG, промпты, инструменты
+    core_agent.py          # главный агент: step() loop, interrupt, stop commands
+    streaming_orchestrator.py  # LLM streaming с queue+thread timeout
+    meta_agent.py          # фоновый анализ контекста (Haiku)
+    rag.py                 # FAISS RAG по материалам курса
+    prompt_generation/     # prompt_constructor, format helpers
+  lecture/                 # student_profiles, transcript_buffer, summarizer
+  data_flow/               # ctx_handler, ctx_host (shared state)
+  data_collectors/stt/     # STT через faster-whisper + interrupt + STT corrections
+  tts/                     # Vosk TTS (primary), Fish Speech (legacy)
+    simple_tts_handler.py  # queue-level prefetch streaming
+    vosk/                  # vosk_tts.py client + sentence splitting
 resources/
-  Prompts/                 # personalities, instructions, abilities
-  Customization/           # wake_words.yml, tool_bank_config и др.
-  Audio/refs/              # голосовые сэмплы для клонирования
-  RAG/                     # course_materials/, lecture_summaries/
+  Prompts/                 # personalities_professor.yml, instructions, tool_fewshots
+  RAG/                     # course_materials/ (4 лекции), lecture_summaries/
+  Audio/tts_cache/         # pre-synthesized common phrases
 data/
-  metrics.db               # SQLite (автосоздаётся)
-  transcripts/             # сырые транскрипты лекций
-  faiss_index/             # персистентный RAG-индекс
+  student_profiles.db      # SQLite (студент-профили)
+  rag_vector_store/        # FAISS index (автосоздаётся)
 ```
 
-## Архитектура
+## Архитектура (3 процесса)
 
-Система на `multiprocessing.Manager` (shared state между процессами):
+```
+STT Process (faster-whisper, CUDA)
+  → ctx_chat (shared via multiprocessing.Manager)
+  → interrupt TTS on real speech recognition
 
-- **STT Process** — faster-whisper, слушает Zoom через VB-Cable #1
-- **Wake Word Detector** — keyword spotting на STT-транскрипте (русские фразы)
-- **CoreAgent** — LLM + RAG по материалам курса
-- **TTS Process** — FishTTS, выход через VB-Cable #2 в Zoom
-- **Live2D** — VTube Studio, эмоции + lipsync → Virtual Camera → Zoom
-- **Transcript Buffer** — копит STT для постфактум-суммаризации
-- **Metrics Logger** — SQLite, все взаимодействия для ВКР
+CoreAgent (main process)
+  → construct_prompt (RAG, student profile, history)
+  → stream Mistral (queue+thread, 10s timeout)
+  → SentenceBuffer → tts_queue
+  ← interrupt on new student message in ctx_chat
 
-### Потоки данных
+TTS Process (Vosk)
+  → queue-level prefetch (synthesize next while playing current)
+  → interrupt support
+```
 
-**Фоновый:** Zoom audio → STT → Transcript Buffer → [после лекции] → LLM суммаризация → RAG
-**Интерактивный:** Wake word → CtxHandler → CoreAgent (RAG) → TTS + Live2D → Zoom
+### Ключевые механизмы
+
+- **Interrupt**: студент говорит → STT транскрибирует → interrupt TTS queue + break LLM stream
+- **Stop commands**: "стоп/подождите/помолчите" → "Хорошо, слушаю." без вызова LLM
+- **Post-interrupt re-entry**: после прерывания агент сразу обрабатывает новое сообщение
+- **Spoken tracking**: в историю сохраняется только озвученная часть + [прервано студентом]
+- **Prefetch TTS**: следующее предложение синтезируется пока текущее играет
+- **LLM timeout**: queue.get(timeout=10) — если Mistral виснет, 10с и восстановление
+- **Meta-agent guard**: только один meta-agent одновременно, не во время стрима
 
 ## Конфигурация
 
 - `.env` — модели, API ключи, аудио-устройства (LiteLLM синтаксис)
-- `resources/Customization/wake_words.yml` — триггер-фразы для обращения к агенту
 - `resources/Prompts/personalities_professor.yml` — персонаж преподавателя
-
-## LLM
-
-- **Основной:** локальная модель через LM Studio/Ollama (`localhost:22227`) или Claude/Mistral API
-- **Embeddings:** `bge-m3` через LM Studio
-- Переключение модели: `CORE_LLM_MODEL_NAME` в `.env`
-
-## Аудио маршрутизация (Zoom)
-
-Требуется два VB-Cable:
-- VB-Cable #1: Zoom speaker → STT (вход)
-- VB-Cable #2: FishTTS → Zoom mic (выход)
+- TTS backend: `TTS_BACKEND=vosk`, `VOSK_SPEAKER_ID=4`, `VOSK_TTS_URL=http://localhost:22232`
+- LLM: `CORE_LLM_MODEL_NAME=mistral/mistral-large-latest`
 
 ## Правила разработки
 
-- Язык кода: Python 3.11+
+- Язык кода: Python 3.10+
 - Код и комментарии: на английском
 - Промпты и персонаж: на русском
 - Конфиги: YAML
-- Метрики: SQLite
-- Не трогать модули NetTyan без необходимости (data_flow, data_schema, live2d, tts)
-- Новый функционал — в `src/lecture/` и `src/metrics/`
+- **Весь неиспользуемый код NetTyan — удалять немедленно**
+- **Хардкод "NetTyan" — заменять на get_name() / удалять**
+- Новый функционал — в `src/lecture/` и `src/agent/`

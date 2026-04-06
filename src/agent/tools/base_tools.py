@@ -9,47 +9,6 @@ from agent.tools.control_tools import (
     _add_tool_run_log,
 )
 from agent.tools.dialogue_tools import _save_user_summary
-from tts.simple_tts_handler import SPELL_TO_EMOTION
-from utils.string_helper import prepare_mc_chat_send
-
-
-def voice_send(voice_dict: List[Dict]) -> bool:
-    "Sends voice list[dict] of voice entries"
-    # TODO untested
-    result_voice_dicts_list = []
-    for voice_info_dict in voice_dict:
-        emo = voice_info_dict.get("emotion", "")
-        if emo and emo in SPELL_TO_EMOTION.keys():
-            voice_info_dict.update({"emotion": SPELL_TO_EMOTION[emo]})
-        result_voice_dicts_list.append(voice_info_dict)
-    return tools_config.queue_send("tts_queue", voice_dict)
-    # TODO add tool to ctx chat tool usage record with state "result"={"await": result_conditions}
-    # result_conditions may be: [{"type": "message", "msg": "this_tool_sent_msg", "result_wait_time": 10}]
-    # then in minebridge all result conditions are checked, and when any of conditions met and result_wait_time is relevant, then result state if this event in ctx_chat is changing to the message result like result (of old event) = {"msg": "this_new_event_result_relevant"}
-    # if time is gone, result={"timeout"}
-
-
-def mc_send(message: str) -> bool:
-    "Sends message / command to minecraft queue"
-    result = tools_config.queue_send("chat_queue", prepare_mc_chat_send(message))
-    return result
-
-
-def chat_simple(message: str) -> bool:
-    """Chat comment tool. Sends a message to the chat.
-
-    Args:
-        message: String, Message
-    """
-    call_id = _add_tool_run_log("chat_simple", {"message": message})
-    print("***GLOBAL CHAT***", message)
-    try:
-        result = mc_send(message)
-        _add_tool_result_log("chat_simple", {"returned": result, "call_id": call_id})
-        return result
-    except Exception as e:
-        _add_tool_error_log("chat_simple", {"returned": str(e), "call_id": call_id})
-    return mc_send(message)
 
 
 def save_user_info(user: str, summary: str, *args, **kwargs) -> bool:
@@ -94,7 +53,6 @@ def save_user_info(user: str, summary: str, *args, **kwargs) -> bool:
         if user is None or not user.strip():
             raise Exception("User is none")
 
-        # result = mc_send(name + ", " + reason)
         result = _save_user_summary(user, summary)
         # Звук о внесении в бд
         # tools_config.ctx_swarm["fx_queue"].put("database_add")
@@ -102,34 +60,6 @@ def save_user_info(user: str, summary: str, *args, **kwargs) -> bool:
         return result
     except Exception as e:
         _add_tool_error_log(tool_name, {"returned": str(e), "call_id": call_id})
-        return False
-
-
-def private_messages(messages: List[Dict]) -> bool:
-    """Functional NOT IMPLEMENTED YET.
-    Gets a list of private messages, but then use only last of them.
-    """
-    call_id = _add_tool_run_log("private_messages", {"messages": messages})
-    try:
-        if isinstance(messages, list) and len(messages) > 0:
-            messageDict = messages[0]
-            user = messageDict["user"]
-            message = messageDict["message"]
-            message = messageDict["message"]
-            print(
-                "***PRIVATE CHAT***", "->", user, message, "\nMessage:(", message, ")"
-            )
-            result = mc_send(user + ", " + message)
-            _add_tool_result_log(
-                "private_messages", {"returned": result, "call_id": call_id}
-            )
-            return result
-        else:
-            raise Exception("No messages in the list or incorrect format!")
-    except Exception as e:
-        _add_tool_error_log(
-            "private_messages", {"returned": str(e), "call_id": call_id}
-        )
         return False
 
 
@@ -211,34 +141,15 @@ def speak(comment: str, emotion: Optional[str] = None) -> bool:
     call_id = _add_tool_run_log("speak", {"comment": comment, "emotion": emotion})
     try:
         print(f"***SPEAK TTS QUEUE***\n> {comment} *{emotion}*")
-        # EXTRA VARIOUS!!!!
-        # TODO do something with filtering / var for disabling this
-        if len(tools_config.ctx_swarm["chat_queue"]) <= 2:
-            mc_send(comment)
-            print("[DEBUG SPEAK TOOL] SEND TO MC QUEUE FROM VOICE" + comment)
         if not comment and not emotion:
             raise Exception("[SPEAK TOOL] No comment and no emotion provided!")
-        result = voice_send([{"text": comment, "emotion": emotion}])
-        _add_tool_result_log("speak", {"returned": result, "call_id": call_id})
-        return result
+        tools_config.ctx_swarm["tts_queue"].append(
+            {"text": comment, "emotion": emotion}
+        )
+        _add_tool_result_log("speak", {"returned": True, "call_id": call_id})
+        return True
     except Exception as e:
         _add_tool_error_log("speak", {"returned": str(e), "call_id": call_id})
-        return False
-
-
-def speak_list(speak_list: List[Dict]) -> bool:
-    """Speak tool that accept a list of speak to add to queue."""
-    call_id = _add_tool_run_log("speak_list", {"speak_list": speak_list})
-    try:
-        for speak in speak_list:
-            comment = speak["comment"]
-            emotion = speak["emotion"]
-            print(f"***SPEAK TTS QUEUE***\n{comment} *{emotion}*")
-        result = voice_send(speak_list)
-        _add_tool_result_log("speak_list", {"returned": result, "call_id": call_id})
-        return result
-    except Exception as e:
-        _add_tool_error_log("speak_list", {"returned": str(e), "call_id": call_id})
         return False
 
 
@@ -263,12 +174,10 @@ def clear_queue(queue_name: str) -> str:
 
 
 def interrupt_chat() -> str:
-    """Clears YOUR chat SENDING queue. No args.
-    USE ONLY WHEN YOUR CURRENT MESSAGE IS MORE INTERESTING THAN THE QUEUE
-    """
+    """Clears TTS queue. No args."""
     call_id = _add_tool_run_log("interrupt_chat", {})
     try:
-        result = clear_queue("chat_queue")
+        result = clear_queue("tts_queue")
         _add_tool_result_log("interrupt_chat", {"returned": result, "call_id": call_id})
         return result
     except Exception as e:

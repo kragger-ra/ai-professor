@@ -476,132 +476,24 @@ def format_single_event(
     self_name: str = SELF_NAME,
     tool_call_format: ToolCommandFormats = "command",
 ) -> str:
-    """
-    Format single event to string for LLM prompt
+    """Format single event to string for LLM prompt.
 
-    Example:
-        EventBase(user=TestNick, ...)
-        ->
-        MINECRAFT CHAT [2.3m ago] TestNick: message
+    Output: "[timestamp] User: message" or "[timestamp] Professor (ты): message"
     """
     ev = event.copy()
-    env: str = ev.get("env", "")
     ev_type_raw = ev.get("type", "")
-    msg = ""
-    if ev_type_raw == "OVERRIDE_ASSISTANT_ROLE":  # if we want just return a text
+
+    if ev_type_raw == "OVERRIDE_ASSISTANT_ROLE":
         return ev.get("msg", "")
+
     timestamp = format_relative_time_event(ev)
-    if ev.get("isTriggerEvent", False):
-        timestamp = "WAKED YOU UP, " + timestamp
-    if not ev.get("user", False):
-        ev["user"] = "(server message)"
-    else:
-        if ev.get("description", False):
-            msg = f"{ev['description']}"
-        else:
-            fields = [
-                f"{k}={v}"
-                for k, v in ev.items()
-                if k not in ["date", "user", "isEvent", "env"]
-            ]
-            msg = f""" in new Event({", ".join(fields)})"""
-    event_type_name = "CHAT"
-    if not ev.get("isEvent"):
-        event_type_name = ""
-        if ev.get("msg", ""):
-            msg = ": " + ev.get("msg", "")
-        else:
-            msg = ": "
-    user_str = ev["user"]
-    if ev.get("user", "") in [self_name]:
-        user_str += " (YOU)"
-    repeat_msg = ""
-    repeat_cnt = ev.get("repeat", 0)
-    if repeat_cnt > 1:
-        repeat_msg = " (x" + str(repeat_cnt) + ")"
-    if ev_type_raw:
-        event_type_name = ev_type_raw.upper()
-        if (
-            ev_type_raw == "tool_call"
-            and ev.get("self")
-            and ev.get("tool")
-            and ev.get("args")
-        ):
-            is_tool_call = False
-            is_single_tool = not ev.get("multiple_tool_call", False)
-            if is_single_tool:
-                # help_tool_use = format_tool_command(
-                #     "focus", {0: "single action"}, tool_call_format=tool_call_format
-                # )
-                formatted_tool_use = format_tool_command(
-                    ev["tool"], ev["args"], tool_call_format=tool_call_format
-                )
-                if formatted_tool_use:
-                    is_tool_call = True
-                    event_type_name = "RESPONSE"
-                    msg = (
-                        # "\n"
-                        TOOL_COMMAND_FORMATS[tool_call_format]["multiple_start"]
-                        # + help_tool_use
-                        # + TOOL_COMMAND_FORMATS[tool_call_format][
-                        #     "multiple_tool_separator"
-                        # ]
-                        + formatted_tool_use
-                        + TOOL_COMMAND_FORMATS[tool_call_format]["multiple_end"]
-                    )
-                    return msg
-            else:
-                if ev.get("formatted_tool_command", False):
-                    is_tool_call = True
-                    event_type_name = "RESPONSE"
-                    msg = (
-                        # "\n"
-                        TOOL_COMMAND_FORMATS[tool_call_format]["multiple_start"]
-                        + ev["formatted_tool_command"]
-                        + TOOL_COMMAND_FORMATS[tool_call_format]["multiple_end"]
-                    )
-                    return msg
-            if is_tool_call:
-                env = ""
-                repeat_msg = ""
-            # print("DEBUG event "+str(ev) + " is_tool_call=" + str(is_tool_call), " resuklt " + msg
-            #     )
-    if env and event_type_name:
-        if env.upper() == event_type_name.upper():
-            event_type_name = ""
-        else:
-            event_type_name = " " + event_type_name
+    user_str = ev.get("user", "") or "система"
+    msg = ev.get("msg", "")
 
-        if env == "voice":
-            msg += " [RECOGNIZED FROM RAW VOICE, ERRORS POSSIBLE!]"
-        elif env == "donation":
-            event_type_name = "DONATION"
-            donation_msg = ev.get("msg", "")
-            msg = (
-                ev.get("description", "")
-                + f"\nDonationInfo[user={user_str}, sum={ev.get('summ', 0)}$]\n"
-            )
-            if donation_msg:
-                msg += (
-                    user_str
-                    + " also sent a message in his donation, FULLY AND HONESTLY ANSWER it as GOOD as you can:\n`"
-                    + donation_msg
-                    + "`"
-                )
-            env = ""
-            repeat_msg = ""
+    if ev.get("self", False) or user_str == self_name:
+        user_str = f"{self_name} (ты)"
 
-    final_result: str = (
-        f"{env.upper()}{event_type_name.upper()} [{timestamp}] {user_str}{msg}{repeat_msg}"
-    )
-
-    return final_result
-
-    # for k, v in event.items():
-    #     if k == "user":
-    #         id_user = db.get_or_create_user(event)
-    #         summary = db.get_user_summary(id_user)
-    #         if summary:
+    return f"[{timestamp}] {user_str}: {msg}"
     #             result+= "\n" + summary
     #     # for direct messages
     #         id_user = db.get_or_create_user(event)
@@ -766,21 +658,17 @@ def format_events_with_roles(
 
     # Add old messages
     if old:
-        add_divider(
-            f"{SELF_NAME}, acknowledge the Old events (older than minute, OLD CONTEXT):\n"
-        )
+        add_divider("Ранее в диалоге:\n")
         add_events(old)
 
     # Add relevant messages
     if relevant:
-        add_divider(
-            f"{SELF_NAME}, the next Events were for the past minute (CONTEXT):\n"
-        )
+        add_divider("Недавний контекст:\n")
         add_events(relevant)
 
     # Add recent messages
     if recent:
-        add_divider(f"{SELF_NAME}, react to Recent events (performs just NOW):\n")
+        add_divider("Текущий диалог:\n")
         add_events(category_events=recent)
     # add_divider("TRG search id=" + str(trigger_event_id) + ",result=" + str(trigger_event))
     # if trigger_event:

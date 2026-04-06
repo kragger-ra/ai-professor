@@ -40,12 +40,12 @@ _SPLIT_CONJUNCTIONS = re.compile(
 
 
 def split_sentences(text: str) -> List[str]:
-    """Split text into sentences suitable for streaming TTS (target: 5-15 words each).
+    """Split text into sentences suitable for streaming TTS (target: 4-10 words each).
 
     Rules:
     - Split on .!? immediately
     - Questions (?) always become separate sentences
-    - Sentences >15 words get split at comma / conjunction
+    - Sentences >10 words get split at comma / conjunction
     - Sentences <3 words get merged with the next sentence
     """
     # First pass: split on sentence-ending punctuation
@@ -56,7 +56,7 @@ def split_sentences(text: str) -> List[str]:
     split = []
     for sent in raw:
         words = sent.split()
-        if len(words) <= 15:
+        if len(words) <= 10:
             split.append(sent)
             continue
         # Try splitting at conjunction
