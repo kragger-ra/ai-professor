@@ -1,5 +1,5 @@
 """
-Integration bridge between lecture modules and the NetTyan pipeline.
+Integration bridge between lecture modules and the AI Professor pipeline.
 
 Wires WakeWordDetector, TranscriptBuffer, LectureSummarizer, and
 MetricsLogger into a single facade consumed by main.py and CoreAgent.
