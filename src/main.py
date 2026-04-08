@@ -902,10 +902,11 @@ def main():
     )
     _log_timing("Gradio interface launched")  # 5s!!
 
-    # Polling thread: drains interaction logs from shared state into LectureManager
+    # Polling thread: drains interaction logs and syncs lecture summary
     def _interaction_poller():
         while ctx_swarm["env"].get("actived", True):
             try:
+                # Drain interaction log
                 data = ctx_swarm["env"].get("last_interaction")
                 if data is not None:
                     lecture_manager.log_interaction(
@@ -916,6 +917,18 @@ def main():
                         emotion=data.get("emotion", "neutral"),
                     )
                     ctx_swarm["env"]["last_interaction"] = None
+
+                # Sync current lecture summary so CoreAgent can read it
+                if lecture_manager.is_recording:
+                    ctx_swarm["env"]["lecture_summary"] = (
+                        lecture_manager.get_current_summary()
+                    )
+                else:
+                    # Keep last summary available even after stop
+                    if lecture_manager.last_summary:
+                        ctx_swarm["env"]["lecture_summary"] = (
+                            lecture_manager.last_summary
+                        )
             except Exception as e:
                 print(f"[interaction_poller] error: {e}")
             time.sleep(2)

@@ -121,6 +121,12 @@ class CoreAgent(BaseAgent):
         """Check if agent is running"""
         return self.running
 
+    _LECTURE_QUERIES = [
+        "о чём пара", "о чем пара", "что происходит", "что сейчас",
+        "о чём лекция", "о чем лекция", "что обсуждали", "что было",
+        "конспект", "что проходили", "о чём говорили", "о чем говорили",
+    ]
+
     def step(self):
         """Run a single iteration of the agent"""
         try:
@@ -135,6 +141,29 @@ class CoreAgent(BaseAgent):
                 output_format="langchain",
                 tool_use_format="command",
             )
+
+            # Inject live lecture context if student asks about the lecture
+            lecture_summary = self.ctx_swarm["env"].get("lecture_summary", "")
+            if lecture_summary:
+                last_msg = ""
+                ctx_chat = self.ctx_handler.get_ctx_chat(dict_format=True, limit=1)
+                if ctx_chat:
+                    entry = ctx_chat[-1]
+                    if isinstance(entry, dict):
+                        last_msg = entry.get("msg", "")
+                if any(q in last_msg.lower() for q in self._LECTURE_QUERIES):
+                    # Prepend lecture notes as system context
+                    lecture_ctx = {
+                        "role": "system",
+                        "content": (
+                            "КОНСПЕКТ ТЕКУЩЕЙ ЛЕКЦИИ (используй для ответа):\n"
+                            + lecture_summary
+                        ),
+                    }
+                    # Insert after the first system message
+                    insert_idx = 1 if messages and messages[0].get("role") == "system" else 0
+                    messages.insert(insert_idx, lecture_ctx)
+
             if self.ctx_swarm["env"].get("debug_print_prompt", False):
                 print("Context messages:")
                 print_messages(messages)
