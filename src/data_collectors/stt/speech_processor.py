@@ -15,11 +15,13 @@ FAR TODO:
         - + Priority for wakewords + on events to trigger
 """
 
+import json
 import os
 import queue
 import threading
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Dict, Union
 
 import numpy as np
@@ -210,6 +212,8 @@ class VoiceInputProcessor:
                     ):
                         self._send_to_ctx_chat(text, user)
 
+    _LIVE_TRANSCRIPT_LOG = os.path.join("data", "lecture_notes", "_live_stream.jsonl")
+
     def _send_to_ctx_chat(self, text, user):
         # user = self.ctx_handler.ctx_swarm["game"].get("last_talking_player", "Developer")
         last_data = self.last_data_entries.get(user)
@@ -226,6 +230,19 @@ class VoiceInputProcessor:
                 # FAR TODO will be fun add like LOUDNESS, processing_time, etc.
             )
             self.ctx_handler.add_message(event)
+
+            # Write to live transcript log for LectureManager
+            if text and len(text) > 3:
+                try:
+                    os.makedirs(os.path.dirname(self._LIVE_TRANSCRIPT_LOG), exist_ok=True)
+                    with open(self._LIVE_TRANSCRIPT_LOG, "a", encoding="utf-8") as f:
+                        f.write(json.dumps({
+                            "time": datetime.now().isoformat(),
+                            "speaker": user,
+                            "text": text,
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
 
 
 def run_voice_processor(ctx_swarm):

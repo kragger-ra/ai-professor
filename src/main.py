@@ -69,6 +69,9 @@ _log_timing("Front imported")
 from tts.simple_tts_handler import simple_tts_handler  # 0.7s to import
 
 _log_timing("TTS imported")
+from lecture.integration import LectureManager
+
+_log_timing("Lecture module imported")
 _log_timing("All imports done")  # 6.2s total
 
 ctx_swarm: CtxSwarmType = CTX_SWARM_EMPTY
@@ -77,6 +80,7 @@ ctx_chat = []
 ctx = None
 Supervisor = None
 processes = []
+lecture_manager: LectureManager = None
 
 
 def main_agent_need_starting():
@@ -508,6 +512,63 @@ with demo:
 
                 chat_queue_input.submit(fn=chat_queue_add, inputs=[chat_queue_input])
 
+    with gr.Tab(label="Lecture"):
+        with gr.Row():
+            lecture_start_btn = gr.Button("Start Lecture", variant="primary")
+            lecture_stop_btn = gr.Button("Stop & Summarize", variant="stop")
+        lecture_status = gr.Textbox(label="Status", value="Not recording", interactive=False)
+        lecture_segments = gr.Number(label="Segments recorded", value=0, interactive=False)
+        lecture_summary_box = gr.Textbox(
+            label="Last summary", lines=12, interactive=False
+        )
+
+        def _lecture_start():
+            if lecture_manager is None:
+                return "LectureManager not initialized"
+            return lecture_manager.start_lecture()
+
+        def _lecture_stop():
+            if lecture_manager is None:
+                return "LectureManager not initialized"
+            return lecture_manager.stop_lecture()
+
+        def _lecture_tick():
+            if lecture_manager is None:
+                return "Not initialized", 0, ""
+            status = "Recording..." if lecture_manager.is_recording else "Stopped"
+            return status, lecture_manager.segment_count, lecture_manager.last_summary
+
+        lecture_start_btn.click(fn=_lecture_start, outputs=[lecture_status])
+        lecture_stop_btn.click(fn=_lecture_stop, outputs=[lecture_summary_box])
+
+        timer_lecture = gr.Timer(value=5)
+        timer_lecture.tick(
+            fn=_lecture_tick,
+            outputs=[lecture_status, lecture_segments, lecture_summary_box],
+            queue=False,
+        )
+
+    with gr.Tab(label="Metrics"):
+        metrics_weekly = gr.Dataframe(label="Weekly stats")
+        metrics_recent = gr.Dataframe(label="Recent interactions (last 10)")
+
+        def _metrics_refresh():
+            if lecture_manager is None:
+                return pd.DataFrame(), pd.DataFrame()
+            weekly = lecture_manager.metrics.get_weekly_stats()
+            recent = lecture_manager.metrics.get_recent_interactions(limit=10)
+            return pd.DataFrame(weekly), pd.DataFrame(recent)
+
+        metrics_refresh_btn = gr.Button("Refresh metrics")
+        metrics_refresh_btn.click(fn=_metrics_refresh, outputs=[metrics_weekly, metrics_recent])
+
+        timer_metrics = gr.Timer(value=15)
+        timer_metrics.tick(
+            fn=_metrics_refresh,
+            outputs=[metrics_weekly, metrics_recent],
+            queue=False,
+        )
+
     with gr.Accordion("System Stats", open=False):
         with gr.Row():
             llm_time = gr.Number(
@@ -665,7 +726,7 @@ _log_timing("All pre-main functions defined")
 
 
 def main():
-    global demo, ctx_chat, ctx_swarm, ctx_handler, ctx, processes, manager, Supervisor, SELF_NAME, processes
+    global demo, ctx_chat, ctx_swarm, ctx_handler, ctx, processes, manager, Supervisor, SELF_NAME, processes, lecture_manager
 
     _log_timing("=== MAIN FUNCTION STARTED ===")
     args = parse_args()
@@ -701,6 +762,10 @@ def main():
             ]
         )
     ctx_handler = CtxHandler(ctx_swarm)
+
+    lecture_manager = LectureManager(ctx_swarm)
+    _log_timing("LectureManager initialized")
+
     # ctx_swarm["fx_queue"].put("starting")
     _log_timing("Starting TTS_Proc process")
     TTS_Proc = Process(
@@ -777,6 +842,40 @@ def main():
         prevent_thread_lock=True,
     )
     _log_timing("Gradio interface launched")  # 5s!!
+
+    # Polling thread: drains interaction logs and syncs lecture summary
+    def _interaction_poller():
+        while ctx_swarm["env"].get("actived", True):
+            try:
+                # Drain interaction log
+                data = ctx_swarm["env"].get("last_interaction")
+                if data is not None:
+                    lecture_manager.log_interaction(
+                        query=data.get("query", ""),
+                        response=data.get("response", ""),
+                        response_time_ms=data.get("response_time_ms", 0),
+                        rag_sources=data.get("rag_sources"),
+                        emotion=data.get("emotion", "neutral"),
+                    )
+                    ctx_swarm["env"]["last_interaction"] = None
+
+                # Sync current lecture summary so CoreAgent can read it
+                if lecture_manager.is_recording:
+                    ctx_swarm["env"]["lecture_summary"] = (
+                        lecture_manager.get_current_summary()
+                    )
+                else:
+                    # Keep last summary available even after stop
+                    if lecture_manager.last_summary:
+                        ctx_swarm["env"]["lecture_summary"] = (
+                            lecture_manager.last_summary
+                        )
+            except Exception as e:
+                print(f"[interaction_poller] error: {e}")
+            time.sleep(2)
+
+    Thread(target=_interaction_poller, daemon=True).start()
+    _log_timing("Interaction poller thread started")
 
     print("== main.py CODEBLOCK AFTER GRADIO LAUNCH ==")
     # starting agent NOW

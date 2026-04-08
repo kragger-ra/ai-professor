@@ -358,6 +358,11 @@ class CoreAgent(BaseAgent):
 
     MAX_CTX_CHAT = 200
 
+    _LECTURE_QUERIES = [
+        "о чём пара", "о чем пара", "что происходит", "что сейчас",
+        "о чём лекция", "о чем лекция", "что обсуждали", "что было",
+        "конспект", "что проходили", "о чём говорили", "о чем говорили",
+    ]
     def step(self):
         """Run a single iteration: wait for trigger → stream LLM → sentence TTS.
 
@@ -425,6 +430,15 @@ class CoreAgent(BaseAgent):
                 if profile_text:
                     from langchain_core.messages import SystemMessage as _SM
                     messages.insert(-1, _SM(content=f"Профиль студента: {profile_text}"))
+
+            # 3.5 Inject live lecture context if student asks about the lecture
+            lecture_summary = self.ctx_swarm["env"].get("lecture_summary", "")
+            if lecture_summary and any(q in last_student_msg.lower() for q in self._LECTURE_QUERIES):
+                from langchain_core.messages import SystemMessage as _SM
+                messages.insert(1, _SM(content=(
+                    "КОНСПЕКТ ТЕКУЩЕЙ ЛЕКЦИИ (используй для ответа):\n" + lecture_summary
+                )))
+                print(f"[AGENT] Injected lecture summary ({len(lecture_summary)} chars)")
 
             self.ctx_swarm["fx_queue"].put("thinking")
 
@@ -520,6 +534,15 @@ class CoreAgent(BaseAgent):
                     except (IndexError, Exception):
                         break
                 print(f"[AGENT] Trimmed ctx_chat: {_chat_len} → {len(self.ctx_handler.ctx_chat)}")
+
+            # 9. Push interaction data for metrics
+            if spoken_text:
+                self.ctx_swarm["env"]["last_interaction"] = {
+                    "query": last_student_msg,
+                    "response": spoken_text,
+                    "response_time_ms": int(elapsed),
+                    "emotion": "neutral",
+                }
 
         except Exception as e:
             print(f"Error running agent: {e}")
