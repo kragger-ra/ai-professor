@@ -40,8 +40,12 @@ PROFESSOR_GOAL = f"""Ты — {SELF_NAME}. МУЖЧИНА. Мужской род
 {PROFESSOR_VOICE_RULES}
 Русский язык. Тег настроения в конце реплики: (neutral) (happy) (thoughtful) (encouraging).
 Не повторяй слова студента. Не пересказывай вопрос. Сразу отвечай по сути.
-Используй контекст из RAG если он есть. Если нет — отвечай из своих знаний.
-ЗАПРЕЩЕНО начинать ответ с "Добрый день", "Привет", "Здравствуйте" — если в чате уже было приветствие. Сразу к делу."""
+ЗАПРЕЩЕНО начинать ответ с "Добрый день", "Привет", "Здравствуйте" — если в чате уже было приветствие. Сразу к делу.
+
+ИСТОЧНИКИ ЗНАНИЙ:
+- Материалы курса (RAG) — основной источник. Если информация найдена — используй.
+- Собственные знания — если в материалах курса нет. Предупреди: "Этого нет в наших материалах, но из общих знаний..."
+- Если вопрос совсем не по теме ИИ/программирования — коротко ответь и верни к курсу."""
 
 
 def construct_prompt(
@@ -49,15 +53,24 @@ def construct_prompt(
     ctx_swarm: dict,
     student_profile: str = "",
     meta_instruction: str = "",
+    rag_score: float = 0.0,
 ) -> str:
     """Build system prompt from personality template + RAG + student context."""
     personality_key = ctx_swarm["states"].get("personality", "professor_default")
     personality_file = "personalities_professor" if "professor" in personality_key else "personalities"
     system_template = prompt_load(personality_file, personality_key)
 
-    final_rag_context = (
-        "\n\n## Контекст из материалов курса:\n" + rag_context if rag_context else ""
-    )
+    # Annotate RAG context based on confidence (L2 distance: lower = better)
+    if rag_context:
+        if rag_score < 0.8:
+            rag_header = "## Контекст из материалов курса (высокая релевантность):"
+        elif rag_score < 1.2:
+            rag_header = "## Контекст из материалов курса (частичное совпадение — дополни из своих знаний):"
+        else:
+            rag_header = "## Контекст из материалов курса (низкая релевантность — опирайся на свои знания):"
+        final_rag_context = f"\n\n{rag_header}\n{rag_context}"
+    else:
+        final_rag_context = ""
     student_section = (
         "\n\n## Профиль студента:\n" + student_profile if student_profile else ""
     )
@@ -155,12 +168,14 @@ def construct_prompt_messages(
 
             def extended_wait_check(event: CtxEventBase) -> bool:
                 def check_timeout():
-                    return time.time() - check_start_time > 30.0
+                    # Must be shorter than wait_for_sync timeout (15s)
+                    # otherwise the safety valve never fires
+                    return time.time() - check_start_time > 5.0
 
                 if len(ctx_handler.ctx_swarm["chat_queue"]) > 1 and not check_timeout():
                     return False
-                if len(ctx_handler.ctx_swarm["tts_queue"]) > 1 and not check_timeout():
-                    return False
+                # Don't gate on tts_queue — step() clears it before streaming,
+                # and blocking here causes deadlock when TTS is slow/dead
                 if default_event_check(event):
                     return True
 
@@ -234,9 +249,11 @@ def construct_prompt_messages(
     )
 
     # Build system prompt
+    rag_score = getattr(rag_model, 'last_score', float('inf')) if rag_model else float('inf')
     prompt = construct_prompt(
         rag_context,
         ctx_swarm=ctx_handler.ctx_swarm,
+        rag_score=rag_score,
     )
 
     if goal is None:

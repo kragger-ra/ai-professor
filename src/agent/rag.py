@@ -155,6 +155,7 @@ class RagModel:
 
         self.load_vec_store()
 
+        self.last_score = float("inf")  # L2 distance of last query (lower = better)
         self.retrivers: Dict[str, VectorStoreRetriever] = {}
         if self.vec_store is not None:
             self.retrivers[self.index_name] = self.vec_store.as_retriever(
@@ -257,6 +258,7 @@ class RagModel:
             scores = [score for _, score in docs_with_scores]
             # score is a distance. Minimum - closer, better
             best_score = min(scores) if scores else float("inf")
+            self.last_score = best_score
             docs = [doc for doc, _ in docs_with_scores]
 
             if not docs or best_score > 1.5:

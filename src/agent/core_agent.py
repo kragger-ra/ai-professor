@@ -118,6 +118,7 @@ class CoreAgent(BaseAgent):
             self._profile_mgr = None
         self._current_student = None
         self._interrupted = False
+        self._greeting_sent = False
 
         if tool_bank is not None:
             self.tool_bank = tool_bank
@@ -346,6 +347,17 @@ class CoreAgent(BaseAgent):
         prof_event["self"] = True
         self.ctx_handler.add_message(prof_event)
 
+    # Greeting prefixes to strip from subsequent responses
+    _GREETING_PREFIXES = [
+        "Привет!", "Привет,", "Привет.", "Привет ",
+        "Здравствуйте!", "Здравствуйте,", "Здравствуйте.", "Здравствуйте ",
+        "Добрый день!", "Добрый день,", "Добрый день.", "Добрый день ",
+        "Доброе утро!", "Доброе утро,", "Доброе утро.", "Доброе утро ",
+        "Добрый вечер!", "Добрый вечер,", "Добрый вечер.", "Добрый вечер ",
+    ]
+
+    MAX_CTX_CHAT = 200
+
     def step(self):
         """Run a single iteration: wait for trigger → stream LLM → sentence TTS.
 
@@ -356,6 +368,11 @@ class CoreAgent(BaseAgent):
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
+
+            print(f"[AGENT-DEBUG] step() called. interrupted={self._interrupted}, "
+                  f"ctx_chat_len={len(self.ctx_handler.ctx_chat)}, "
+                  f"meta_running={getattr(self, '_meta_running', False)}, "
+                  f"tts_queue_len={len(self.ctx_swarm['tts_queue'])}")
 
             import random
             from agent.streaming_orchestrator import stream_response_sentences
@@ -437,6 +454,18 @@ class CoreAgent(BaseAgent):
                     tts_q.append({"text": "interrupt", "emotion": "interrupt"})
                     break
 
+                # Strip greeting from first sentence if already greeted
+                if sentence_count == 0 and self._greeting_sent:
+                    for g in self._GREETING_PREFIXES:
+                        if sentence.startswith(g):
+                            sentence = sentence[len(g):].strip()
+                            print(f"[AGENT] Stripped repeated greeting: '{g}'")
+                            break
+                    if not sentence:
+                        continue  # skip empty sentence after greeting removal
+                elif sentence_count == 0:
+                    self._greeting_sent = True
+
                 sentence_count += 1
                 spoken_sentences.append(sentence)
 
@@ -480,6 +509,17 @@ class CoreAgent(BaseAgent):
             # 7. If interrupted — flag for immediate re-run (skip wait_for_sync)
             if interrupted:
                 self._interrupted = True
+
+            # 8. Trim ctx_chat to prevent unbounded growth
+            _chat_len = len(self.ctx_handler.ctx_chat)
+            if _chat_len > self.MAX_CTX_CHAT:
+                _trim = _chat_len - self.MAX_CTX_CHAT
+                for _ in range(_trim):
+                    try:
+                        self.ctx_handler.ctx_chat.pop(0)
+                    except (IndexError, Exception):
+                        break
+                print(f"[AGENT] Trimmed ctx_chat: {_chat_len} → {len(self.ctx_handler.ctx_chat)}")
 
         except Exception as e:
             print(f"Error running agent: {e}")
