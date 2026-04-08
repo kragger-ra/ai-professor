@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 _LIVE_TRANSCRIPT_LOG = os.path.join("data", "lecture_notes", "_live_stream.jsonl")
 _LIVE_NOTES_DIR = os.path.join("data", "lecture_notes")
 _WATCHER_POLL_SEC = 10
-_SUMMARIZE_THRESHOLD = 20  # summarize after this many buffered lines
+_SUMMARIZE_THRESHOLD = 10  # summarize after this many buffered lines
 
 
 class LectureManager:
@@ -229,9 +229,13 @@ class LectureManager:
 
     def get_current_summary(self) -> str:
         """Current lecture notes for answering 'what's this lecture about?'."""
-        if not self._current_notes:
-            return "Пока ничего существенного не обсуждалось."
-        return "\n\n".join(self._current_notes)
+        if self._current_notes:
+            return "\n\n".join(self._current_notes)
+        # Fallback: if no periodic summaries yet, return raw transcript
+        raw = self.transcript_buffer.get_full_text()
+        if raw and len(raw) > 20:
+            return "Транскрипт текущей лекции (конспект ещё не готов):\n" + raw
+        return ""
 
     @property
     def last_summary(self) -> str:
