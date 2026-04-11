@@ -41,6 +41,7 @@ from agent.meta_agent import analyze_context, build_meta_instruction, extract_st
 from agent.tools.base_tools import _parse_emotion
 from lecture.student_profiles import StudentProfileManager
 from utils.patterns import BACKCHANNEL_PATTERNS
+from lecture.lecture_delivery import LectureDelivery, prepare_lecture, DELIVERY_SYSTEM_PROMPT
 from agent.tools.tool_executor import execute_tools
 from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
 from config_schema.general import get_name
@@ -141,6 +142,11 @@ class CoreAgent(BaseAgent):
         # Break reminder (feature 4)
         self._session_start_time = time.time()
         self._break_suggested = False
+
+        # Lecture mode
+        self._lecture_mode = False
+        self._lecture_delivery = None
+        self._lecture_waiting_reply = False  # waiting for check_question answer
 
         if tool_bank is not None:
             self.tool_bank = tool_bank
@@ -390,15 +396,204 @@ class CoreAgent(BaseAgent):
         "о чём лекция", "о чем лекция", "что обсуждали", "что было",
         "конспект", "что проходили", "о чём говорили", "о чем говорили",
     ]
+
+    _LECTURE_STOP_WORDS = ["стоп", "подожди", "пауза", "секунду", "помолчи"]
+    _LECTURE_REPEAT_WORDS = ["повтори", "ещё раз", "еще раз", "не понял", "непонятно"]
+
+    # ------------------------------------------------------------------
+    # Lecture mode
+    # ------------------------------------------------------------------
+
+    def start_lecture(self, topic: str, duration_min: int = 30):
+        """Prepare and start a lecture on the given topic."""
+        _agent_log(f"[LECTURE] Preparing lecture: '{topic}', {duration_min} min")
+        self._send_to_tts(f"Готовлю лекцию по теме: {topic}. Одну минуту.")
+
+        # Gather RAG context for the topic
+        rag_context = ""
+        if self.rag_model:
+            rag_context = self.rag_model.explain(topic) or ""
+
+        try:
+            plan = prepare_lecture(topic, rag_context, duration_min)
+            self._lecture_delivery = LectureDelivery(plan)
+            self._lecture_mode = True
+            self._lecture_waiting_reply = False
+
+            # Save plan for debugging
+            plan_path = os.path.join("data", "lecture_plans", f"plan_{int(time.time())}.json")
+            self._lecture_delivery.save_plan(plan_path)
+
+            self._send_to_tts(f"Начинаем лекцию: {plan.get('topic', topic)}.")
+            _agent_log(f"[LECTURE] Started: {self._lecture_delivery.total_blocks} blocks")
+        except Exception as e:
+            _agent_log(f"[LECTURE] Preparation failed: {e}")
+            traceback.print_exc()
+            self._send_to_tts("Не удалось подготовить лекцию. Попробуйте ещё раз.")
+
+    def stop_lecture(self):
+        """Stop lecture and return to normal mode."""
+        self._lecture_mode = False
+        self._lecture_delivery = None
+        self._lecture_waiting_reply = False
+        _agent_log("[LECTURE] Stopped")
+
+    def _lecture_step(self):
+        """One iteration of lecture delivery loop."""
+        from agent.streaming_orchestrator import stream_response_sentences
+
+        delivery = self._lecture_delivery
+        if not delivery or not delivery.active:
+            self._send_to_tts("На этом лекция закончена. Есть вопросы по всему материалу?")
+            self.stop_lecture()
+            return
+
+        block = delivery.get_current_block()
+        if block is None:
+            self._send_to_tts("Лекция завершена. Спрашивайте, если что-то осталось непонятным.")
+            self.stop_lecture()
+            return
+
+        _agent_log(f"[LECTURE] Block {delivery.progress}: type={block.get('type')}, "
+                   f"style={block.get('delivery_style')}")
+
+        # Build prompt and stream through Mistral → TTS
+        delivery_prompt = delivery.build_delivery_prompt(block)
+        messages = [
+            {"role": "system", "content": DELIVERY_SYSTEM_PROMPT},
+            {"role": "user", "content": delivery_prompt},
+        ]
+
+        _chat_len_before = len(self.ctx_handler.ctx_chat)
+        interrupted = False
+        spoken_sentences = []
+
+        for sentence in stream_response_sentences(messages, temperature=0.6, max_tokens=300):
+            # Check for student interrupt
+            if len(self.ctx_handler.ctx_chat) > _chat_len_before:
+                _agent_log("[LECTURE] Student interrupted during block")
+                interrupted = True
+                tts_q = self.ctx_swarm["tts_queue"]
+                tts_q[:] = []
+                tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+                break
+            spoken_sentences.append(sentence)
+            self._send_to_tts(sentence)
+
+        spoken_text = " ".join(spoken_sentences).strip()
+        if spoken_text:
+            self._save_to_history(spoken_text + (" [прервано студентом]" if interrupted else ""))
+
+        # If interrupted, handle student message
+        if interrupted:
+            self._handle_lecture_interrupt()
+            return
+
+        # Advance to next block
+        delivery.advance()
+
+        # Check question if the block has one
+        check_q = block.get("check_question")
+        if check_q:
+            time.sleep(1.5)
+            self._send_to_tts(check_q)
+            self._save_to_history(check_q)
+            self._lecture_waiting_reply = True
+            self._waiting_for_reply = True
+            self._silence_hint_sent = False
+            self._last_response_time = time.time()
+            return
+
+        # Inter-block pause: listen for 3 seconds
+        time.sleep(3)
+
+        # Check if student said something during the pause
+        if len(self.ctx_handler.ctx_chat) > _chat_len_before:
+            self._handle_lecture_interrupt()
+        else:
+            _agent_log(f"[LECTURE] Silence after block, continuing to {delivery.progress}")
+
+    def _handle_lecture_interrupt(self):
+        """Handle a student message during lecture delivery."""
+        recent = self.ctx_handler.get_ctx_chat(dict_format=True, limit=3)
+        student_msg = ""
+        for m in reversed(recent):
+            if not m.get("self"):
+                student_msg = m.get("msg", "")
+                break
+
+        msg_lower = student_msg.strip().lower().rstrip(".!?,")
+        _agent_log(f"[LECTURE] Student said: '{student_msg[:60]}'")
+
+        # Backchannel — continue
+        if msg_lower in BACKCHANNEL_PATTERNS:
+            _agent_log("[LECTURE] Backchannel, continuing")
+            return
+
+        # Stop / pause
+        if any(w in msg_lower for w in self._LECTURE_STOP_WORDS) and len(student_msg) < 50:
+            self._send_to_tts("Хорошо, жду. Скажи когда продолжать.")
+            self._save_to_history("Хорошо, жду. Скажи когда продолжать.")
+            # Wait for "continue" trigger
+            self._lecture_waiting_reply = True
+            self._waiting_for_reply = True
+            self._last_response_time = time.time()
+            return
+
+        # Repeat / didn't understand
+        if any(w in msg_lower for w in self._LECTURE_REPEAT_WORDS) and len(student_msg) < 50:
+            _agent_log("[LECTURE] Repeating block with simpler style")
+            self._lecture_delivery.rewind_current(simpler=True)
+            self._send_to_tts("Хорошо, объясню иначе.")
+            return
+
+        # Check-question answer (if waiting)
+        if self._lecture_waiting_reply and self._lecture_delivery.blocks_delivered:
+            react_prompt = self._lecture_delivery.build_react_prompt(student_msg)
+            if react_prompt:
+                from agent.streaming_orchestrator import stream_response_sentences
+                messages = [
+                    {"role": "system", "content": DELIVERY_SYSTEM_PROMPT},
+                    {"role": "user", "content": react_prompt},
+                ]
+                for sentence in stream_response_sentences(messages, temperature=0.5, max_tokens=100):
+                    self._send_to_tts(sentence)
+                self._lecture_waiting_reply = False
+                self._waiting_for_reply = False
+                return
+
+        # Regular question — answer via normal RAG pipeline, then continue
+        _agent_log("[LECTURE] Answering student question, then continuing")
+        self._lecture_mode = False  # temporarily disable lecture mode
+        self._interrupted = True   # process this message in normal step()
+        # After normal step() answers, lecture_mode will be re-enabled
+        # via _post_lecture_question flag
+        self._post_lecture_question = True
+
     def step(self):
         """Run a single iteration: wait for trigger → stream LLM → sentence TTS.
 
         Architecture v2: no classification step, direct streaming from Mistral.
         Meta-analysis runs AFTER response in background thread.
+        Lecture mode: delivers prepared blocks instead of waiting for triggers.
         """
         try:
             if not self.initialized:
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
+                return
+
+            # Lecture mode dispatch
+            if self._lecture_mode and self._lecture_delivery:
+                _agent_log(f"[LECTURE] step() — block {self._lecture_delivery.progress}")
+                self._lecture_step()
+                return
+
+            # Re-enter lecture after answering a student question
+            if getattr(self, '_post_lecture_question', False) and self._lecture_delivery:
+                self._post_lecture_question = False
+                self._lecture_mode = True
+                self._send_to_tts("Продолжаем лекцию.")
+                _agent_log("[LECTURE] Resuming after student question")
                 return
 
             _agent_log(f"[AGENT-DEBUG] step() called. interrupted={self._interrupted}, "

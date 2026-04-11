@@ -348,6 +348,37 @@ with demo:
 
         exit_btn = gr.Button("EXIT (Release Audio + Shutdown)", variant="stop")
         exit_btn.click(fn=_exit_all)
+    # Lecture mode controls
+    with gr.Group():
+        gr.Markdown("### Lecture Mode")
+        with gr.Row():
+            lecture_topic_input = gr.Textbox(
+                value="RAG-системы: архитектура и применение",
+                label="Тема лекции",
+                scale=3,
+            )
+            lecture_duration = gr.Number(value=30, label="Минут", minimum=10, maximum=60, scale=1)
+        with gr.Row():
+            lecture_start_btn = gr.Button("Start Lecture", variant="primary")
+            lecture_stop_btn = gr.Button("Stop Lecture", variant="stop")
+            lecture_status = gr.Textbox(value="—", label="Status", interactive=False, scale=2)
+
+        def _start_lecture(topic, duration):
+            if Supervisor and hasattr(Supervisor, 'start_lecture'):
+                from threading import Thread
+                Thread(target=Supervisor.start_lecture, args=(topic, int(duration)), daemon=True).start()
+                return f"Preparing: {topic} ({int(duration)} min)"
+            return "Agent not running"
+
+        def _stop_lecture():
+            if Supervisor and hasattr(Supervisor, 'stop_lecture'):
+                Supervisor.stop_lecture()
+                return "Stopped"
+            return "Agent not running"
+
+        lecture_start_btn.click(fn=_start_lecture, inputs=[lecture_topic_input, lecture_duration], outputs=[lecture_status])
+        lecture_stop_btn.click(fn=_stop_lecture, outputs=[lecture_status])
+
     gr.Markdown(
         """
             # Virtual Streamer Interface
