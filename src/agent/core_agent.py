@@ -48,6 +48,18 @@ from utils.debug import bcolors
 from data_flow.ctx_handler import CtxHandler
 from utils.debug import print_messages
 
+
+def _agent_log(msg):
+    """Write agent debug to file (stdout often lost on Windows multiprocessing)."""
+    import datetime
+    line = f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {msg}"
+    print(line, flush=True)
+    try:
+        with open("data/agent_log.txt", "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
 # Regex for splitting sentences: punctuation followed by space, or newline(s)
 _SENTENCE_BOUNDARY_RE = re.compile(r'(?<=[.!?])\s+|\n+')
 # Minimum chars before we consider splitting a sentence off
@@ -389,7 +401,7 @@ class CoreAgent(BaseAgent):
                 print("[DEBUG CORE AGENT] NOT INITIALIZED")
                 return
 
-            print(f"[AGENT-DEBUG] step() called. interrupted={self._interrupted}, "
+            _agent_log(f"[AGENT-DEBUG] step() called. interrupted={self._interrupted}, "
                   f"ctx_chat_len={len(self.ctx_handler.ctx_chat)}, "
                   f"meta_running={getattr(self, '_meta_running', False)}, "
                   f"tts_queue_len={len(self.ctx_swarm['tts_queue'])}")
@@ -452,7 +464,7 @@ class CoreAgent(BaseAgent):
             # 2.5a Backchannel detection: "угу/ага" — skip LLM, no response
             _last_msg_stripped = last_student_msg.strip().lower().rstrip(".!?,")
             if _last_msg_stripped in BACKCHANNEL_PATTERNS:
-                print(f"[AGENT] Backchannel detected, skipping: '{last_student_msg}'")
+                _agent_log(f"[AGENT] Backchannel detected, skipping: '{last_student_msg}'")
                 return
 
             # Reset silence timer on real student message
@@ -491,7 +503,7 @@ class CoreAgent(BaseAgent):
             _max_tokens = 150 if len(last_student_msg) < 25 else 500
             t0 = time.perf_counter()
             messages_dicts = self._to_dicts(messages)
-            print(f"[AGENT] Starting LLM stream (max_tokens={_max_tokens}, "
+            _agent_log(f"[AGENT] Starting LLM stream (max_tokens={_max_tokens}, "
                   f"msg='{last_student_msg[:50]}')")
             spoken_sentences = []   # sentences actually sent to TTS
             sentence_count = 0
@@ -548,6 +560,22 @@ class CoreAgent(BaseAgent):
                 if spoken_text:
                     self._save_to_history(spoken_text)
 
+            # Retry on empty response (LLM error / timeout)
+            if not spoken_text and not interrupted:
+                self._retry_count = getattr(self, '_retry_count', 0) + 1
+                if self._retry_count <= 3:
+                    _agent_log(f"[AGENT] Empty response from LLM — retry {self._retry_count}/3 in 3s")
+                    time.sleep(3)
+                    self._interrupted = True
+                    return
+                else:
+                    _agent_log("[AGENT] LLM failed after 3 retries — notifying student")
+                    self._send_to_tts("Извини, сервер не отвечает. Попробуй спросить ещё раз через минуту.")
+                    self._retry_count = 0
+                    return
+
+            self._retry_count = 0  # reset on successful response
+
             # Silence timer: track if professor asked a question
             self._last_response_time = time.time()
             if spoken_text.rstrip().endswith("?"):
@@ -596,13 +624,13 @@ class CoreAgent(BaseAgent):
                 }
 
         except Exception as e:
-            print(f"Error running agent: {e}")
+            _agent_log(f"[AGENT] ERROR in step(): {e}")
             traceback.print_exc()
             time.sleep(10)
 
     def run(self):
         """Main agent loop"""
-        print("Starting simple chat agent")
+        _agent_log("[AGENT] === Agent run() started ===")
         self.running = True
         self.ctx_swarm["fx_queue"].put("starting")
         while self.ctx_swarm["env"]["actived"] and self.running:

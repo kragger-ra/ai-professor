@@ -105,7 +105,8 @@ def _stream_to_queue(messages, temperature, max_tokens, q):
             max_tokens=max_tokens,
             temperature=temperature,
             stream=True,
-            timeout=15,
+            timeout=10,
+            api_base=os.getenv("CORE_LLM_API_BASE") or None,
         )
         for chunk in response:
             delta = chunk.choices[0].delta
@@ -131,15 +132,23 @@ def stream_fast(messages: list, temperature: float = 0.6,
     )
     t.start()
 
+    stream_start = time.time()
+    got_first_token = False
+
     while True:
         try:
             token = q.get(timeout=10)  # 10s hard timeout per chunk
         except queue.Empty:
-            print("[STREAM] Timeout: no tokens for 10s, aborting")
+            elapsed = time.time() - stream_start
+            if not got_first_token:
+                print(f"[STREAM] Connection hang: no first token in {elapsed:.0f}s, aborting")
+            else:
+                print(f"[STREAM] Timeout: no tokens for 10s, aborting")
             break
         if token is None:
             print("[STREAM] Stream finished normally")
             break
+        got_first_token = True
         yield token
 
 

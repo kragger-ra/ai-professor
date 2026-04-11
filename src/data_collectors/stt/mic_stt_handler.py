@@ -88,13 +88,16 @@ def _correct_with_vocabulary(text: str, rag_vocab: set) -> str:
     corrected = []
     for word in words:
         word_clean = word.strip(".,;:!?")
-        if len(word_clean) < 3:
+        # Skip short words — too many false positives at dist=2
+        if len(word_clean) < 5:
             corrected.append(word)
             continue
         word_lower = word_clean.lower()
         best_match = None
         best_dist = 3  # max distance threshold
         for term in rag_vocab:
+            if len(term) < 5:
+                continue  # don't match against short terms either
             if abs(len(word_lower) - len(term.lower())) > 3:
                 continue
             dist = _levenshtein(word_lower, term.lower())

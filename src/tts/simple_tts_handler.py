@@ -79,8 +79,8 @@ def check_tts_queue(
             tts_dict = tts_queue[0]
             if tts_dict:
                 if _is_interrupt(tts_dict):
-                    if check_interrupt or len(tts_queue) == 1:
-                        tts_queue.pop(0)
+                    tts_queue.pop(0)
+                    if check_interrupt:
                         return True
                 else:
                     if check_interrupt:
@@ -197,6 +197,16 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
             # Play (blocking)
             audio_processor.play_sound(audio, sr, blocking=True)
             played += 1
+
+            # Micro-pause between sentences for natural pacing
+            if si + 1 < len(sentences):
+                # Within same TTS item — short pause
+                pause_audio, pause_sr = generate_silence(0.25)
+                audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
+            elif len(tts_queue) > 0 and not _is_interrupt(tts_queue[0]):
+                # Between TTS items (different LLM ideas) — longer pause
+                pause_audio, pause_sr = generate_silence(0.5)
+                audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
 
             log.info(f"[TTS] #{played} audio: {audio_dur:.1f}s | '{sentence[:50]}'")
 
