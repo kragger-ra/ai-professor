@@ -46,6 +46,11 @@ def analyze_context(student_profile: str, last_messages: List[str],
 
 Текущее сообщение студента: {current_message}
 
+Правила для needs_analogy:
+- true ТОЛЬКО если студент явно не понял ("не понимаю", "сложно", "объясни проще", "что это значит?") или tech_level по теме <= 2
+- false если студент задал конкретный технический вопрос, уже понял предыдущее, или сказал "понятно"/"ясно"
+- По умолчанию false
+
 Определи и ответь JSON (без markdown):
 {{
   "mood": "спокоен|раздражён|растерян|любопытен|торопится|шутит",
@@ -55,6 +60,7 @@ def analyze_context(student_profile: str, last_messages: List[str],
   "inappropriate_content": false,
   "style_instruction": "одно предложение как именно отвечать",
   "topic": "docker|rag|tts|llm|python|embeddings|prompts|general|unknown",
+  "needs_analogy": false,
   "profile_updates": {{
     "tech_level_delta": 0,
     "add_topic": null,
@@ -113,5 +119,10 @@ def build_meta_instruction(meta: dict, student_known: bool = True) -> str:
 
     if meta.get("request_type") == "знакомство":
         parts.append("Студент представляется. Поприветствуй ОДНИМ коротким предложением и жди вопрос. НЕ начинай объяснять что-либо сам.")
+
+    if meta.get("needs_analogy"):
+        parts.append("Студент не понял. Объясни через простую аналогию.")
+    else:
+        parts.append("Объясняй прямо, без аналогий.")
 
     return " ".join(p for p in parts if p)

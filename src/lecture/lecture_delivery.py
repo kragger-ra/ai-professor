@@ -40,12 +40,24 @@ def prepare_lecture(topic: str, rag_context: str, duration_min: int = 30) -> dic
 - id: порядковый номер
 - type: intro / concept / example / practice / recap
 - key_points: 2-4 тезиса (что сказать, НЕ дословный текст)
-- delivery_style: casual_start / explain_with_analogy / walkthrough / interactive / summary
-- analogy_hint: подсказка для аналогии (если есть, иначе null)
+- delivery_style: casual_start / explain_direct / explain_with_analogy / walkthrough / interactive / summary
+- analogy_hint: подсказка для аналогии (ТОЛЬКО если delivery_style = explain_with_analogy, иначе null)
 - check_question: вопрос аудитории после блока (null если не нужен)
 - estimated_seconds: примерное время блока
 
-Правила:
+Правила назначения delivery_style:
+- casual_start: только первый блок (вступление)
+- explain_direct: основной стиль для concept-блоков — прямое объяснение без аналогий
+- explain_with_analogy: ТОЛЬКО для абстрактных концепций без физического воплощения
+  (embeddings, attention mechanism, latent space). Максимум 2-3 блока из всей лекции.
+- walkthrough: для конкретных инструкций, команд, примеров (блоки type=example, practice)
+- interactive: только блоки с check_question
+- summary: только последний блок (итоги)
+
+Не ставь explain_with_analogy на блоки про Docker-команды, файловые пути,
+конфигурации, конкретные API-вызовы — это практика, не абстракция.
+
+Другие правила:
 - Начинай легко (intro), заканчивай резюме (recap)
 - Через каждые 3-4 блока — check_question (не чаще)
 - Примеры (example) — после каждого сложного concept
@@ -80,6 +92,7 @@ def prepare_lecture(topic: str, rag_context: str, duration_min: int = 30) -> dic
 # Style instruction map for delivery prompts
 _STYLE_INSTRUCTIONS = {
     "casual_start": "Начни легко и неформально, как будто только сел за стол.",
+    "explain_direct": "Объясняй прямо и по делу, без аналогий. Факты и суть.",
     "explain_with_analogy": "Объясни через аналогию: {hint}.",
     "walkthrough": "Проведи по шагам, как будто делаешь вместе со студентом.",
     "interactive": "Вовлекай аудиторию, обращайся к ним.",
