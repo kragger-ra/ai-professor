@@ -201,11 +201,11 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
             # Micro-pause between sentences for natural pacing
             if si + 1 < len(sentences):
                 # Within same TTS item — short pause
-                pause_audio, pause_sr = generate_silence(0.25)
+                pause_audio, pause_sr = generate_silence(0.18)
                 audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
             elif len(tts_queue) > 0 and not _is_interrupt(tts_queue[0]):
                 # Between TTS items (different LLM ideas) — longer pause
-                pause_audio, pause_sr = generate_silence(0.5)
+                pause_audio, pause_sr = generate_silence(0.35)
                 audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
 
             log.info(f"[TTS] #{played} audio: {audio_dur:.1f}s | '{sentence[:50]}'")
