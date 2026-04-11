@@ -42,6 +42,7 @@ from agent.tools.base_tools import _parse_emotion
 from lecture.student_profiles import StudentProfileManager
 from utils.patterns import BACKCHANNEL_PATTERNS
 from lecture.lecture_delivery import LectureDelivery, prepare_lecture, DELIVERY_SYSTEM_PROMPT
+from agent.humor import try_humor
 from agent.tools.tool_executor import execute_tools
 from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
 from config_schema.general import get_name
@@ -744,6 +745,31 @@ class CoreAgent(BaseAgent):
             elapsed = (time.perf_counter() - t0) * 1000
             spoken_text = " ".join(spoken_sentences).strip()
 
+            # 5. Humor injection (after streaming, before history save)
+            if not interrupted and spoken_text and sentence_count >= 2:
+                _topic = last_student_msg[:100] if last_student_msg else "общая тема"
+                _student_interactions = 0
+                if self._current_student and self._profile_mgr:
+                    try:
+                        _prof = self._profile_mgr.get_or_create_student(self._current_student)
+                        _student_interactions = _prof.get("total_interactions", 0)
+                    except Exception:
+                        pass
+                _meta = getattr(self, '_last_meta_result', {}) or {}
+                _with_humor = try_humor(
+                    response_text=spoken_text,
+                    topic=_topic,
+                    meta_result=_meta,
+                    student_msg=last_student_msg,
+                    student_interactions=_student_interactions,
+                )
+                if _with_humor != spoken_text:
+                    # Extract the injected humor line and send to TTS
+                    _humor_line = _with_humor.replace(spoken_text, "").strip()
+                    if _humor_line:
+                        self._send_to_tts(_humor_line)
+                        spoken_text = _with_humor
+
             if interrupted:
                 print(f"[AGENT] Interrupted after {sentence_count} sentences, "
                       f"{elapsed:.0f}ms, spoken: '{spoken_text[:80]}'")
@@ -787,6 +813,7 @@ class CoreAgent(BaseAgent):
                 def _post_response():
                     try:
                         _, _, meta_result = self._run_meta_analysis()
+                        self._last_meta_result = meta_result
                         self._update_student_profile(meta_result, _spoken, _student_msg)
                     except Exception as e:
                         print(f"[META BG] Error: {e}")
