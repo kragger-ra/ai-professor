@@ -123,6 +123,8 @@ def _flush_accumulator(ctx_handler: CtxHandler, ctx_swarm: CtxSwarmType):
     """Send accumulated STT segments as one message."""
     global _stt_accumulator
     if not _stt_accumulator:
+        # No speech content — was noise. Clear flag.
+        ctx_swarm["voice"]["student_speaking"] = False
         return
     full_text = " ".join(_stt_accumulator)
     _stt_accumulator = []
@@ -139,6 +141,8 @@ def _flush_accumulator(ctx_handler: CtxHandler, ctx_swarm: CtxSwarmType):
         filter_results={"acceptable": True},
     )
     ctx_handler.add_message(event)
+    # Student finished speaking — message is ready for agent
+    ctx_swarm["voice"]["student_speaking"] = False
 
 
 def mic_stt_handler(
@@ -208,6 +212,12 @@ def mic_stt_handler(
                         speech_buffer.clear()
                         silence_count = 0
                         _stt_log(f"[MIC-STT] Speech started (RMS={rms:.0f})")
+                        # IMMEDIATE interrupt: stop TTS + signal agent to pause
+                        tts_q = ctx_swarm["tts_queue"]
+                        tts_q[:] = []
+                        tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+                        ctx_swarm["voice"]["student_speaking"] = True
+                        _stt_log("[MIC-STT] Immediate TTS interrupt + student_speaking=True")
                     speech_buffer.append(audio_chunk.copy())
                     silence_count = 0
                 else:
@@ -215,7 +225,7 @@ def mic_stt_handler(
                         speech_buffer.append(audio_chunk.copy())
                         silence_count += 1
                         if silence_count >= SILENCE_AFTER_SPEECH_BLOCKS:
-                            # Speech ended
+                            # Speech ended — clear student_speaking after transcription
                             is_speaking = False
                             if len(speech_buffer) >= SPEECH_MIN_BLOCKS:
                                 _transcribe_and_accumulate(
@@ -223,6 +233,7 @@ def mic_stt_handler(
                                 )
                             else:
                                 print("[MIC-STT] Too short, skipping")
+                                ctx_swarm["voice"]["student_speaking"] = False
                             speech_buffer.clear()
     except Exception as e:
         _stt_log(f"[MIC-STT] Error: {e}")
@@ -284,26 +295,18 @@ def _transcribe_and_accumulate(
 
     _stt_log(f"[MIC-STT] >>> {text}")
 
-    # Backchannel detection: "угу/ага" — don't interrupt, don't trigger agent
+    # Backchannel detection: "угу/ага" — don't trigger agent, but allow accumulation
     text_stripped = text.strip().lower().rstrip(".!?,")
     if text_stripped in BACKCHANNEL_PATTERNS:
-        _stt_log(f"[STT] Backchannel, no interrupt: '{text}'")
+        _stt_log(f"[STT] Backchannel: '{text}'")
+        # Mark as noise so agent can ignore it
+        ctx_swarm["env"]["last_stt_backchannel"] = True
         return
 
-    # Interrupt TTS when real speech is recognized (not backchannel)
-    if ctx_swarm["voice"]["is_speaking"]:
-        tts_q = ctx_swarm["tts_queue"]
-        tts_q[:] = []
-        tts_q.append({"text": "interrupt", "emotion": "interrupt"})
-        _stt_log("[MIC-STT] Interrupted TTS — student said something")
+    # Mark as real speech (not noise/backchannel)
+    ctx_swarm["env"]["last_stt_backchannel"] = False
 
-        # First segment while professor speaking — interrupt immediately
-        # but still accumulate for complete thought
-        _stt_accumulator.append(text)
-        _stt_last_segment_time = time.time()
-        return
-
-    # Accumulate segments (feature 6)
+    # Accumulate segments — interrupt already happened at speech start
     _stt_accumulator.append(text)
     _stt_last_segment_time = time.time()
 

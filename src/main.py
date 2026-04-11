@@ -797,7 +797,14 @@ def main():
     lecture_manager = LectureManager(ctx_swarm)
     _log_timing("LectureManager initialized")
 
-    # ctx_swarm["fx_queue"].put("starting")
+    # Initialize VoiceMeeter routing before TTS starts
+    try:
+        from utils.voicemeeter_control import direct_mode
+        _vm_status = direct_mode()
+        _log_timing(f"VoiceMeeter initialized: {_vm_status}")
+    except Exception as e:
+        _log_timing(f"VoiceMeeter init failed (non-critical): {e}")
+
     _log_timing("Starting TTS_Proc process")
     TTS_Proc = Process(
         target=simple_tts_handler,

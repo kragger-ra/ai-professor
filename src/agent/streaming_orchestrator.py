@@ -99,6 +99,8 @@ class SentenceBuffer:
 def _stream_to_queue(messages, temperature, max_tokens, q):
     """Run litellm streaming in a thread, push tokens to queue."""
     try:
+        _api_base = os.getenv("CORE_LLM_API_BASE")
+        _effective = _api_base if _api_base and _api_base != "NONE" else None
         response = litellm.completion(
             model=FAST_MODEL,
             messages=messages,
@@ -106,15 +108,19 @@ def _stream_to_queue(messages, temperature, max_tokens, q):
             temperature=temperature,
             stream=True,
             timeout=10,
-            api_base=os.getenv("CORE_LLM_API_BASE") or None,
+            api_base=_effective,
         )
+        token_count = 0
         for chunk in response:
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 q.put(delta.content)
+                token_count += 1
+        if token_count == 0:
+            print(f"[STREAM] WARNING: 0 tokens received from {FAST_MODEL}", flush=True)
         q.put(None)  # signal end
     except Exception as e:
-        print(f"[STREAM] Error in thread: {e}")
+        print(f"[STREAM] Error in thread: {e}", flush=True)
         q.put(None)
 
 
@@ -122,7 +128,7 @@ def stream_fast(messages: list, temperature: float = 0.6,
                 max_tokens: int = 500) -> Generator[str, None, None]:
     """Stream tokens from fast model with hard timeout per chunk."""
     import queue
-    print(f"[STREAM] Calling {FAST_MODEL}, max_tokens={max_tokens}")
+    print(f"[STREAM] Calling {FAST_MODEL}, max_tokens={max_tokens}", flush=True)
 
     q = queue.Queue()
     t = threading.Thread(
@@ -134,6 +140,7 @@ def stream_fast(messages: list, temperature: float = 0.6,
 
     stream_start = time.time()
     got_first_token = False
+    MAX_STREAM_TIME = 30  # hard cap: 30s max total stream time
 
     while True:
         try:
@@ -141,12 +148,16 @@ def stream_fast(messages: list, temperature: float = 0.6,
         except queue.Empty:
             elapsed = time.time() - stream_start
             if not got_first_token:
-                print(f"[STREAM] Connection hang: no first token in {elapsed:.0f}s, aborting")
+                print(f"[STREAM] Connection hang: no first token in {elapsed:.0f}s, aborting", flush=True)
             else:
-                print(f"[STREAM] Timeout: no tokens for 10s, aborting")
+                print(f"[STREAM] Timeout: no tokens for 10s, aborting", flush=True)
             break
         if token is None:
-            print("[STREAM] Stream finished normally")
+            print("[STREAM] Stream finished normally", flush=True)
+            break
+        # Hard cap on total stream time
+        if time.time() - stream_start > MAX_STREAM_TIME:
+            print(f"[STREAM] Max stream time {MAX_STREAM_TIME}s reached, aborting", flush=True)
             break
         got_first_token = True
         yield token
@@ -168,18 +179,29 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
     """
     buffer = SentenceBuffer()
     full_response = ""
+    _resp_start = time.time()
+    _last_yield_time = time.time()
 
     for token in stream_fast(messages, temperature, max_tokens):
         full_response += token
         sentences = buffer.add(token)
         for sentence in sentences:
+            _last_yield_time = time.time()
             yield sentence
+
+        # Force flush if buffer hasn't yielded a sentence in 8s
+        # (Mistral sometimes generates long text without punctuation)
+        if time.time() - _last_yield_time > 8 and buffer.buffer.strip():
+            forced = buffer.flush()
+            if forced:
+                print(f"[STREAM] Force-flushing buffer after 8s: '{forced[:50]}'", flush=True)
+                _last_yield_time = time.time()
+                yield forced
 
     # Flush remaining
     remaining = buffer.flush()
     if remaining:
         yield remaining
-        full_response += ""  # already in full_response from tokens
 
     return full_response
 

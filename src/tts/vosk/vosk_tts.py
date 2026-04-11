@@ -290,6 +290,23 @@ def vosk_tts_emo(inp: dict) -> Tuple[np.ndarray, int]:
     if not text.strip():
         return np.zeros(VOSK_SAMPLE_RATE // 2, dtype=np.float32), VOSK_SAMPLE_RATE
 
+    # Pronunciation fixes for Vosk TTS
+    import re as _re
+    _TTS_PRONUNCIATION = [
+        (_re.compile(r'\bAI\b'), 'Эй Ай'),
+        (_re.compile(r'\bAPI\b'), 'Эй Пи Ай'),
+        (_re.compile(r'\bLLM\b'), 'Эл Эл Эм'),
+        (_re.compile(r'\bRAG\b'), 'РАГ'),
+        (_re.compile(r'\bSTT\b'), 'Эс Ти Ти'),
+        (_re.compile(r'\bTTS\b'), 'Ти Ти Эс'),
+        (_re.compile(r'\bFAISS\b'), 'ФАЙСС'),
+        (_re.compile(r'\bGPT\b'), 'Джи Пи Ти'),
+        # Stress/pronunciation fixes for Russian words
+        (_re.compile(r'\bассистент', _re.IGNORECASE), 'ассистэ́нт'),
+    ]
+    for pattern, replacement in _TTS_PRONUNCIATION:
+        text = pattern.sub(replacement, text)
+
     # Check phrase cache first
     cached = get_cached_audio(text)
     if cached is not None:
