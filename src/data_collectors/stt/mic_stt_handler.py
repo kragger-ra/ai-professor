@@ -23,6 +23,7 @@ from data_flow.ctx_handler import CtxHandler
 from data_schema.chat_structures import EventBase
 from data_schema.ctx_structures import CtxSwarmType
 from utils.time_helper import eztime
+from utils.patterns import BACKCHANNEL_PATTERNS
 
 # Audio params
 SAMPLE_RATE = 16000
@@ -64,12 +65,86 @@ def _stt_log(msg):
         pass
 
 
+def _levenshtein(s1: str, s2: str) -> int:
+    """Levenshtein edit distance."""
+    if len(s1) < len(s2):
+        return _levenshtein(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    prev_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        curr_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            curr_row.append(min(prev_row[j + 1] + 1, curr_row[j] + 1, prev_row[j] + (c1 != c2)))
+        prev_row = curr_row
+    return prev_row[-1]
+
+
+def _correct_with_vocabulary(text: str, rag_vocab: set) -> str:
+    """Apply fuzzy correction using RAG vocabulary terms."""
+    if not rag_vocab or not text:
+        return text
+    words = text.split()
+    corrected = []
+    for word in words:
+        word_clean = word.strip(".,;:!?")
+        if len(word_clean) < 3:
+            corrected.append(word)
+            continue
+        word_lower = word_clean.lower()
+        best_match = None
+        best_dist = 3  # max distance threshold
+        for term in rag_vocab:
+            if abs(len(word_lower) - len(term.lower())) > 3:
+                continue
+            dist = _levenshtein(word_lower, term.lower())
+            if 0 < dist <= 2 and dist < best_dist:
+                best_match = term
+                best_dist = dist
+        if best_match:
+            _stt_log(f"[STT-CORRECT] '{word}' -> '{best_match}' (dist={best_dist})")
+            corrected.append(best_match)
+        else:
+            corrected.append(word)
+    return " ".join(corrected)
+
+
+# STT accumulator state
+_stt_accumulator = []
+_stt_last_segment_time = 0.0
+_STT_ACCUMULATE_PAUSE = 2.0  # seconds of silence = "end of thought"
+_STT_ACCUMULATE_MAX_CHARS = 500
+
+
+def _flush_accumulator(ctx_handler: CtxHandler, ctx_swarm: CtxSwarmType):
+    """Send accumulated STT segments as one message."""
+    global _stt_accumulator
+    if not _stt_accumulator:
+        return
+    full_text = " ".join(_stt_accumulator)
+    _stt_accumulator = []
+    _stt_log(f"[MIC-STT] Flushed accumulator: '{full_text}'")
+
+    user = ctx_swarm["game"].get("last_talking_player", "Student") or "Student"
+    event = EventBase(
+        processing_timestamp=time.time_ns(),
+        date=eztime(),
+        env="voice",
+        user=user,
+        type="chat",
+        msg=full_text,
+        filter_results={"acceptable": True},
+    )
+    ctx_handler.add_message(event)
+
+
 def mic_stt_handler(
     ctx_swarm: CtxSwarmType,
     audio_device_index: int = None,
     audio_device_name: str = "",
 ):
-    """Main loop: capture mic → VAD → transcribe → add to ctx_chat."""
+    """Main loop: capture mic → VAD → transcribe → accumulate → add to ctx_chat."""
+    global _stt_accumulator, _stt_last_segment_time
     # Clear log
     try:
         open("data/stt_log.txt", "w").close()
@@ -81,6 +156,10 @@ def mic_stt_handler(
 
     if audio_device_index is None and audio_device_name:
         audio_device_index = find_mic_device(audio_device_name)
+
+    # RAG vocabulary for contextual STT correction (loaded lazily from ctx_swarm)
+    rag_vocab = set()
+    rag_vocab_loaded = False
 
     _stt_log(f"[MIC-STT] Device index: {audio_device_index}, name: {audio_device_name}")
     _stt_log(f"[MIC-STT] Loading Whisper on {device}...")
@@ -104,6 +183,21 @@ def mic_stt_handler(
                 audio_chunk = data[:, 0]  # mono
                 rms = np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2))
 
+                # Lazy-load RAG vocabulary once available
+                if not rag_vocab_loaded:
+                    raw = ctx_swarm["env"].get("rag_vocabulary", [])
+                    if raw:
+                        rag_vocab = set(raw)
+                        rag_vocab_loaded = True
+                        _stt_log(f"[MIC-STT] RAG vocabulary loaded: {len(rag_vocab)} terms")
+
+                # Check accumulator flush (every VAD block = ~100ms)
+                if _stt_accumulator:
+                    pause = time.time() - _stt_last_segment_time
+                    total_chars = sum(len(s) for s in _stt_accumulator)
+                    if pause > _STT_ACCUMULATE_PAUSE or (total_chars > _STT_ACCUMULATE_MAX_CHARS and pause > 1.0):
+                        _flush_accumulator(ctx_handler, ctx_swarm)
+
                 if rms > SILENCE_THRESHOLD:
                     # Speech detected
                     if not is_speaking:
@@ -121,8 +215,8 @@ def mic_stt_handler(
                             # Speech ended
                             is_speaking = False
                             if len(speech_buffer) >= SPEECH_MIN_BLOCKS:
-                                _transcribe_and_send(
-                                    recognizer, speech_buffer, ctx_handler, ctx_swarm
+                                _transcribe_and_accumulate(
+                                    recognizer, speech_buffer, ctx_handler, ctx_swarm, rag_vocab
                                 )
                             else:
                                 print("[MIC-STT] Too short, skipping")
@@ -135,13 +229,16 @@ def mic_stt_handler(
     print("[MIC-STT] Exiting")
 
 
-def _transcribe_and_send(
+def _transcribe_and_accumulate(
     recognizer: FasterWhisperSTT,
     speech_buffer: list,
     ctx_handler: CtxHandler,
     ctx_swarm: CtxSwarmType,
+    rag_vocab: set,
 ):
-    """Transcribe buffered speech and send to agent."""
+    """Transcribe buffered speech, accumulate segments, handle backchannels."""
+    global _stt_accumulator, _stt_last_segment_time
+
     audio = np.concatenate(speech_buffer)
     duration = len(audio) / SAMPLE_RATE
     _stt_log(f"[MIC-STT] Transcribing {duration:.1f}s audio...")
@@ -179,28 +276,33 @@ def _transcribe_and_send(
     for pattern, replacement in _STT_FIXES:
         text = pattern.sub(replacement, text)
 
+    # RAG vocabulary correction (feature 7)
+    text = _correct_with_vocabulary(text, rag_vocab)
+
     _stt_log(f"[MIC-STT] >>> {text}")
 
-    # Interrupt TTS when real speech is recognized (not noise)
+    # Backchannel detection: "угу/ага" — don't interrupt, don't trigger agent
+    text_stripped = text.strip().lower().rstrip(".!?,")
+    if text_stripped in BACKCHANNEL_PATTERNS:
+        _stt_log(f"[STT] Backchannel, no interrupt: '{text}'")
+        return
+
+    # Interrupt TTS when real speech is recognized (not backchannel)
     if ctx_swarm["voice"]["is_speaking"]:
         tts_q = ctx_swarm["tts_queue"]
         tts_q[:] = []
         tts_q.append({"text": "interrupt", "emotion": "interrupt"})
         _stt_log("[MIC-STT] Interrupted TTS — student said something")
 
-    user = ctx_swarm["game"].get("last_talking_player", "Student")
-    if not user:
-        user = "Student"
-    event = EventBase(
-        processing_timestamp=time.time_ns(),
-        date=eztime(),
-        env="voice",
-        user=user,
-        type="chat",
-        msg=text,
-        filter_results={"acceptable": True},
-    )
-    ctx_handler.add_message(event)
+        # First segment while professor speaking — interrupt immediately
+        # but still accumulate for complete thought
+        _stt_accumulator.append(text)
+        _stt_last_segment_time = time.time()
+        return
+
+    # Accumulate segments (feature 6)
+    _stt_accumulator.append(text)
+    _stt_last_segment_time = time.time()
 
 
 if __name__ == "__main__":

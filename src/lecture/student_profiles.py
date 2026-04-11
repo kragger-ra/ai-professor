@@ -30,9 +30,17 @@ class StudentProfileManager:
                 topics_of_interest TEXT DEFAULT '[]',
                 known_issues TEXT DEFAULT '[]',
                 personality_notes TEXT DEFAULT '',
-                background TEXT DEFAULT ''
+                background TEXT DEFAULT '',
+                topic_levels TEXT DEFAULT '{}'
             )
         """)
+        # Migration: add topic_levels column if missing
+        try:
+            self.conn.execute("ALTER TABLE students ADD COLUMN topic_levels TEXT DEFAULT '{}'")
+            self.conn.commit()
+        except Exception:
+            pass  # column already exists
+
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS interaction_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,7 +80,7 @@ class StudentProfileManager:
     def update_profile(self, name: str, updates: dict):
         allowed = {
             "tech_level", "communication_style", "topics_of_interest",
-            "known_issues", "personality_notes", "background",
+            "known_issues", "personality_notes", "background", "topic_levels",
         }
         sets, vals = [], []
         for k, v in updates.items():
@@ -110,6 +118,24 @@ class StudentProfileManager:
         )
         self.conn.commit()
 
+    def get_topic_level(self, name: str, topic: str) -> int:
+        """Get student level for a specific topic."""
+        student = self.get_or_create_student(name)
+        levels = json.loads(student.get("topic_levels") or "{}")
+        return levels.get(topic.lower(), student.get("tech_level", 3))
+
+    def update_topic_level(self, name: str, topic: str, delta: int):
+        """Shift student level for a specific topic."""
+        student = self.get_or_create_student(name)
+        levels = json.loads(student.get("topic_levels") or "{}")
+        current = levels.get(topic.lower(), student.get("tech_level", 3))
+        levels[topic.lower()] = max(1, min(5, current + delta))
+        self.conn.execute(
+            "UPDATE students SET topic_levels = ? WHERE LOWER(name) = LOWER(?)",
+            (json.dumps(levels, ensure_ascii=False), name),
+        )
+        self.conn.commit()
+
     def get_profile_for_prompt(self, name: str) -> str:
         student = self.get_or_create_student(name)
         if student["total_interactions"] <= 1:
@@ -135,4 +161,10 @@ class StudentProfileManager:
                 parts.append(f"Интересы: {', '.join(topics[:5])}")
         if student["personality_notes"]:
             parts.append(f"Заметки: {student['personality_notes']}")
+        topic_levels_raw = student.get("topic_levels") or "{}"
+        topic_levels = json.loads(topic_levels_raw) if isinstance(topic_levels_raw, str) else {}
+        if topic_levels:
+            level_names = {1: "начинающий", 2: "базовый", 3: "средний", 4: "продвинутый", 5: "эксперт"}
+            tl_parts = [f"{t}: {level_names.get(v, 'средний')}" for t, v in topic_levels.items()]
+            parts.append(f"Уровни по темам: {', '.join(tl_parts)}")
         return ". ".join(parts)

@@ -276,6 +276,27 @@ class RagModel:
         return NOT_FOUND_MSG
 
 
+    def get_vocabulary(self) -> set:
+        """Extract technical terms from RAG documents for STT correction."""
+        if hasattr(self, '_vocabulary_cache'):
+            return self._vocabulary_cache
+        terms = set()
+        for doc in self.docs:
+            text = doc.page_content if hasattr(doc, 'page_content') else str(doc)
+            for w in text.split():
+                w_clean = w.strip(".,;:!?()[]{}\"'«»—–")
+                if not w_clean or len(w_clean) < 3:
+                    continue
+                # Latin or mixed-script technical terms
+                if any(c.isascii() and c.isalpha() for c in w_clean):
+                    terms.add(w_clean)
+                # Russian uppercase abbreviations (3+ chars)
+                elif w_clean.isupper() and len(w_clean) >= 3:
+                    terms.add(w_clean)
+        self._vocabulary_cache = terms
+        return self._vocabulary_cache
+
+
 if __name__ == "__main__":
 
     # file_path = 'NetTyanSlang.txt'

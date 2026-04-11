@@ -833,6 +833,13 @@ def main():
         Supervisor = CoreAgent(ctx_swarm, ctx_handler)
         _log_timing("CoreAgent supervisor created")  # 2.5s!!!
 
+        # Inject RAG vocabulary into ctx_swarm for STT correction
+        if Supervisor.rag_model:
+            rag_vocab = Supervisor.rag_model.get_vocabulary()
+            ctx_swarm["env"]["rag_vocabulary"] = list(rag_vocab)
+            print(f"[main.py] RAG vocabulary injected: {len(rag_vocab)} terms")
+        _log_timing("RAG vocabulary injected")
+
     _log_timing("Launching Gradio interface")
     demo.launch(
         favicon_path=os.path.join(REPO_RESOURCE_PATH, "Pictures", "appico.ico"),

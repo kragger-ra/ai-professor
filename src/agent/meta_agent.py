@@ -54,12 +54,14 @@ def analyze_context(student_profile: str, last_messages: List[str],
   "humor_detected": false,
   "inappropriate_content": false,
   "style_instruction": "одно предложение как именно отвечать",
+  "topic": "docker|rag|tts|llm|python|embeddings|prompts|general|unknown",
   "profile_updates": {{
     "tech_level_delta": 0,
     "add_topic": null,
     "add_issue": null,
     "communication_note": null,
-    "background_info": null
+    "background_info": null,
+    "topic_level_update": null
   }}
 }}"""
 

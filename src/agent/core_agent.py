@@ -40,6 +40,7 @@ from agent.tools import tools_config
 from agent.meta_agent import analyze_context, build_meta_instruction, extract_student_info
 from agent.tools.base_tools import _parse_emotion
 from lecture.student_profiles import StudentProfileManager
+from utils.patterns import BACKCHANNEL_PATTERNS
 from agent.tools.tool_executor import execute_tools
 from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
 from config_schema.general import get_name
@@ -119,6 +120,15 @@ class CoreAgent(BaseAgent):
         self._current_student = None
         self._interrupted = False
         self._greeting_sent = False
+
+        # Silence timer (feature 3)
+        self._last_response_time = 0.0
+        self._silence_hint_sent = False
+        self._waiting_for_reply = False
+
+        # Break reminder (feature 4)
+        self._session_start_time = time.time()
+        self._break_suggested = False
 
         if tool_bank is not None:
             self.tool_bank = tool_bank
@@ -272,6 +282,11 @@ class CoreAgent(BaseAgent):
                 student = self._profile_mgr.get_or_create_student(self._current_student)
                 new_level = max(1, min(5, student["tech_level"] + delta))
                 self._profile_mgr.update_profile(self._current_student, {"tech_level": new_level})
+            tlu = updates.get("topic_level_update")
+            if tlu and isinstance(tlu, dict) and tlu.get("topic") and tlu.get("delta"):
+                self._profile_mgr.update_topic_level(
+                    self._current_student, tlu["topic"], tlu["delta"]
+                )
 
             # Log interaction
             self._profile_mgr.log_interaction(
@@ -382,6 +397,25 @@ class CoreAgent(BaseAgent):
             import random
             from agent.streaming_orchestrator import stream_response_sentences
 
+            # Break reminder (feature 4): once after 60 min
+            if not self._break_suggested and (time.time() - self._session_start_time) > 3600:
+                self._send_to_tts("Мы общаемся уже больше часа. Может, сделаем небольшой перерыв минут на пять?")
+                self._break_suggested = True
+
+            # Silence timer (feature 3): check before waiting for trigger
+            if self._waiting_for_reply and self._last_response_time > 0:
+                silence_duration = time.time() - self._last_response_time
+                if silence_duration > 30 and self._silence_hint_sent:
+                    self._send_to_tts("Ладно, пойдём дальше. Вернёмся к этому позже.")
+                    self._waiting_for_reply = False
+                    self._silence_hint_sent = False
+                    self._last_response_time = time.time()
+                    return
+                elif silence_duration > 10 and not self._silence_hint_sent:
+                    self._send_to_tts("Подумай не спеша, я подожду.")
+                    self._silence_hint_sent = True
+                    return
+
             # 1. Wait for trigger and build prompt (includes RAG)
             # After interrupt: skip wait_for_trigger, use latest message
             _wait = not self._interrupted
@@ -415,7 +449,17 @@ class CoreAgent(BaseAgent):
                     last_student_msg = m.get("msg", "")
                     break
 
-            # 2.5 Stop commands: don't generate, just acknowledge and wait
+            # 2.5a Backchannel detection: "угу/ага" — skip LLM, no response
+            _last_msg_stripped = last_student_msg.strip().lower().rstrip(".!?,")
+            if _last_msg_stripped in BACKCHANNEL_PATTERNS:
+                print(f"[AGENT] Backchannel detected, skipping: '{last_student_msg}'")
+                return
+
+            # Reset silence timer on real student message
+            self._waiting_for_reply = False
+            self._silence_hint_sent = False
+
+            # 2.5b Stop commands: don't generate, just acknowledge and wait
             _stop_words = ["стоп", "подождите", "помолчите", "секунду", "погодите", "хватит", "тихо"]
             _msg_lower = last_student_msg.lower()
             if any(w in _msg_lower for w in _stop_words) and len(last_student_msg) < 50:
@@ -496,7 +540,6 @@ class CoreAgent(BaseAgent):
             if interrupted:
                 print(f"[AGENT] Interrupted after {sentence_count} sentences, "
                       f"{elapsed:.0f}ms, spoken: '{spoken_text[:80]}'")
-                # Save what was actually spoken + mark as interrupted
                 if spoken_text:
                     self._save_to_history(spoken_text + " [прервано студентом]")
             else:
@@ -504,6 +547,14 @@ class CoreAgent(BaseAgent):
                       f"{elapsed:.0f}ms, {len(spoken_text)} chars")
                 if spoken_text:
                     self._save_to_history(spoken_text)
+
+            # Silence timer: track if professor asked a question
+            self._last_response_time = time.time()
+            if spoken_text.rstrip().endswith("?"):
+                self._waiting_for_reply = True
+                self._silence_hint_sent = False
+            else:
+                self._waiting_for_reply = False
 
             # 6. Meta-analysis — only if NOT interrupted and no meta already running
             if not interrupted and not getattr(self, '_meta_running', False):
