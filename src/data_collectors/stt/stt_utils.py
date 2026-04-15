@@ -1,6 +1,7 @@
 """PCM constants"""
 
 import io
+import os
 
 import librosa
 import numpy as np
@@ -125,15 +126,15 @@ def audio_format_bytes(
 
 
 if __name__ == "__main__":
-    audio: AudioSegment = AudioSegment.from_wav(
-        r"D:\Pets\NetTyan\MC\NetTyanNew\run\voicechat_recordings\2025-03-08-12-44-35-678\Chochok_clip.wav"
-    )
+    sample_path = os.getenv("STT_SAMPLE_WAV")
+    if not sample_path:
+        raise SystemExit("Set STT_SAMPLE_WAV to point at a test audio file")
+    audio: AudioSegment = AudioSegment.from_wav(sample_path)
     print(
-        "!!! 1",
+        "in:",
         audio.channels,
         audio.frame_rate,
         audio.sample_width,
-        str(audio.get_array_of_samples()),
     )
     audiof = audio_format_bytes(
         audio.raw_data,
@@ -141,10 +142,6 @@ if __name__ == "__main__":
         channels=audio.channels,
         sample_width_bits=audio.sample_width * 8,
     )
-    print(
-        "!!! 2 ", audiof.channels, audiof.frame_rate, audiof.sample_width
-    )  # , str(audiof.get_array_of_samples()))
-    audiof.export(
-        "D:\\Pets\\NetTyan\\MC\\NetTyanNew\\run\\voicechat_recordings\\2025-03-08-12-44-35-678\\Chochok_clip_fixed.wav",
-        format="wav",
-    )
+    print("out:", audiof.channels, audiof.frame_rate, audiof.sample_width)
+    out_path = os.getenv("STT_SAMPLE_OUT", "stt_sample_fixed.wav")
+    audiof.export(out_path, format="wav")

@@ -67,15 +67,5 @@ def get_actual_frame() -> str:
     return get_obs_frame()
 
 
-def load_sample_image() -> str:
-    img = Image.open(
-        r"C:\Pets\NetTyan\Python\NetTyanRepo\NetTyan\resources\Pictures\app.png"
-    )
-    img_str = img_to_str(img)
-    return img_str
-
-
 if __name__ == "__main__":
-    print(
-        "sample img =", get_obs_frame()[:30], "..."
-    )  # Print first 30 chars of base64 string
+    print("sample img =", get_obs_frame()[:30], "...")

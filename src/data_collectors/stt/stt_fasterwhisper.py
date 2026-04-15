@@ -63,12 +63,9 @@ class FasterWhisperSTT:
 
 
 if __name__ == "__main__":
-    bad_audio = AudioSegment.from_mp3(
-        r"C:\Pets\NetTyan\MC\NetTyanNew\run\voicechat_recordings\2025-03-08-12-44-35-678\Chochok.mp3"
-    )
-    audio = AudioSegment.from_wav(
-        r"C:\Pets\NetTyan\MC\NetTyanNew\run\voicechat_recordings\2025-03-08-12-44-35-678\ПропишиSpawn.wav"
-    )
+    sample_path = os.getenv("STT_SAMPLE_WAV")
+    if not sample_path:
+        raise SystemExit("Set STT_SAMPLE_WAV to point at a test audio file")
+    audio = AudioSegment.from_file(sample_path)
     recognizer = FasterWhisperSTT("cuda")
-    print("11111?")
     print("Recognized:", recognizer.transcribe_audio(audio))
