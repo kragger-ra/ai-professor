@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-# This is the main entry point for the Virtual Streamer system.
-# It provides a Gradio interface for interacting with the system, including chat, TTS, and system status.
-# The system integrates a Large Language Model (LLM) for chat, Text-to-Speech (TTS) with MoeGoe VITS, and Live2D avatar with real-time lip sync.
-import argparse  # Add at top with other imports
+# Entry point for the AI Professor system.
+# Provides a Gradio interface, spawns STT/TTS/agent processes, manages shared ctx_swarm state.
+import argparse
 import asyncio
 import json
 import logging
@@ -35,13 +34,6 @@ def _log_timing(msg: str):
 _log_timing("System imports done. Starting main import sequence")
 
 
-# TODO untested
-# Configure logging - allow smolagents but disable others
-# logging.basicConfig(level=logging.INFO)  # Enable all logs initially
-# for logger_name in logging.root.manager.loggerDict:
-#     if 'smolagents' not in logger_name:  # Keep smolagents logs enabled
-#         logging.getLogger(logger_name).disabled = True
-#         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
 from data_collectors.stt.speech_processor import run_voice_processor
 from data_flow.ctx_handler import CtxHandler
 from data_schema.ctx_structures import CtxSwarmType
@@ -381,12 +373,12 @@ with demo:
 
     gr.Markdown(
         """
-            # Virtual Streamer Interface
+            # AI Professor Interface
 
-            An AI-powered VTuber system integrating:
-            - Large Language Model (LLM) for chat
-            - Text-to-Speech with emotional support
-            - Live2D avatar with real-time lip sync and emotion connect
+            Voice-based AI teaching assistant:
+            - LLM backbone (Mistral API or local LM Studio)
+            - RAG over course materials
+            - Vosk TTS with emotional tags
             """
     )
     with gr.Tab(label="Control"):
@@ -408,13 +400,10 @@ with demo:
             gr.Markdown(
                 """# Command line interface
 
-                The one as agent has. Can be multiline.
+                Direct input to the agent. Can be multiline.
 
                 ```
-                !tool tool_arg1 tool_arg2 "big string arg 3"
                 > text to speak and chat print *emotion*
-                /minecraft_cmd
-                @baritone_cmd
                 ```
                 """,
                 container=True,
@@ -692,16 +681,6 @@ def CompleteShutDown(signal=None, frame=None):
         process: Process
         for process in processes:
             process.terminate()
-            # Thread(target=safe_terminate, args=(process,)).start()
-
-        # MineBridgeProc.terminate()
-        # MineBridgeProc.join()
-        # YoutubeChatCheckerProc.terminate()
-        # YoutubeChatCheckerProc.join()
-        # DiscordProc.terminate()
-        # DiscordProc.join()
-        # LargeFREDProc.terminate()
-        # LargeFREDProc.join()
         time.sleep(1)
         print("Manager shutdown")
         manager.shutdown()
@@ -713,35 +692,18 @@ def CompleteShutDown(signal=None, frame=None):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="NetTyan Virtual Streamer")
-    parser.add_argument(
-        "-l", "--old", action="store_true", help="Run old autogpt agent"
-    )
-    parser.add_argument("-m", "--multi", action="store_true", help="Run multiagent")
+    parser = argparse.ArgumentParser(description="AI Professor")
     parser.add_argument(
         "-r",
         "--no-stt",
         action="store_true",
-        help="Speech to text start",
-    )
-    parser.add_argument(
-        "-f",
-        "--no-filter",
-        action="store_true",
-        help="Disable filtering",
+        help="Disable speech-to-text",
     )
     parser.add_argument(
         "-s",
         "--stop-auto",
         action="store_true",
         help="Do not start agent automatically",
-    )
-    parser.add_argument(
-        "-o",
-        "--offline",
-        action="store_true",
-        # default=False,
-        help="Dont start social services",
     )
     parser.add_argument(
         "-w",
@@ -779,11 +741,6 @@ def main():
     _log_timing("ctx_swarm created")  # 6s!!! (because of processes?)
     ctx_swarm["env"]["debug_print_prompt"] = True
     ctx_chat = ctx_swarm["ctx_chat"]
-    ctx_game = ctx_swarm["game"]
-    from data_flow.database import StreamerDatabase
-
-    DATABASE = StreamerDatabase()
-    _log_timing("DATABASE initialized")
     if args.warmup:
         ctx_swarm["tts_queue"].extend(
             [
@@ -856,37 +813,19 @@ def main():
     AGENT_AUTO_START = not args.stop_auto
     print("[main.py] ======== AGENT_AUTO_START = " + str(AGENT_AUTO_START))
     _log_timing(f"Agent auto-start: {AGENT_AUTO_START}")
-    if args.old:
-        print("[main.py] ======== CHOOSEN NEW TESTING REACTION PIPELINE")
-        _log_timing("Importing Agent")
-        from agent.multi.reaction_agent import ReactionAgent
+    _log_timing("Importing CoreAgent")
+    from agent.core_agent import CoreAgent
 
-        _log_timing("Creating Agent supervisor")
-        Supervisor = ReactionAgent(ctx_swarm, ctx_handler)
-        _log_timing("Agent supervisor created")
-    elif args.multi:
-        print("[main.py] ======== CHOOSEN MULTIAGENT PIPELINE")
-        _log_timing("Importing MultiAgent")
-        from agent.multiagent import MultiAgent
+    _log_timing("Creating CoreAgent supervisor")
+    Supervisor = CoreAgent(ctx_swarm, ctx_handler)
+    _log_timing("CoreAgent supervisor created")
 
-        _log_timing("Creating MultiAgent supervisor")
-        Supervisor = MultiAgent(ctx_swarm, ctx_handler)
-        _log_timing("MultiAgent supervisor created")
-    else:
-        print("[main.py] ======== CHOOSEN NEW CORE PIPELINE")
-        _log_timing("Importing CoreAgent")
-        from agent.core_agent import CoreAgent
-
-        _log_timing("Creating CoreAgent supervisor")  # 3.3s!!!
-        Supervisor = CoreAgent(ctx_swarm, ctx_handler)
-        _log_timing("CoreAgent supervisor created")  # 2.5s!!!
-
-        # Inject RAG vocabulary into ctx_swarm for STT correction
-        if Supervisor.rag_model:
-            rag_vocab = Supervisor.rag_model.get_vocabulary()
-            ctx_swarm["env"]["rag_vocabulary"] = list(rag_vocab)
-            print(f"[main.py] RAG vocabulary injected: {len(rag_vocab)} terms")
-        _log_timing("RAG vocabulary injected")
+    # Inject RAG vocabulary into ctx_swarm for STT correction
+    if Supervisor.rag_model:
+        rag_vocab = Supervisor.rag_model.get_vocabulary()
+        ctx_swarm["env"]["rag_vocabulary"] = list(rag_vocab)
+        print(f"[main.py] RAG vocabulary injected: {len(rag_vocab)} terms")
+    _log_timing("RAG vocabulary injected")
 
     _log_timing("Launching Gradio interface")
     demo.launch(
