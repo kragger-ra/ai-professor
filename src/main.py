@@ -455,25 +455,6 @@ with demo:
                 ctx_save_btn.click(fn=lambda: save_ctx_chat_to_json(ctx_chat), outputs=[save_status])
                 ctx_print_btn.click(fn=lambda: print_ctx_chat(ctx_chat))
 
-            with gr.Row():
-                vision_prompt_input = gr.Textbox(
-                    value="What's on my screen right now?", label="Vision Prompt"
-                )
-                analyze_vision_btn = gr.Button("Analyze Screen")
-                vision_result = gr.Textbox(label="Vision Analysis Result")
-
-                def run_vision_tool(prompt):
-                    from agent.tools.vision_tools import screenshot
-
-                    result = screenshot(prompt)
-                    return json.dumps(result, indent=2)
-
-                analyze_vision_btn.click(
-                    fn=run_vision_tool,
-                    inputs=[vision_prompt_input],
-                    outputs=[vision_result],
-                )
-
         with gr.Accordion("Automatic TTS info", open=True) as accordion:
             with gr.Row():
                 with gr.Column(scale=1):

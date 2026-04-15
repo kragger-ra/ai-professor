@@ -34,12 +34,24 @@ from dateutil.parser import parse
 if __name__ == "__main__":  # for one-file testing
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
-from agent.tools.tool_executor import format_tool_command
 from config_schema.general import get_name
 from data_schema.chat_structures import EventBase, MentionedUser
 from data_schema.ctx_structures import CtxChatType
 from data_schema.tool_structures import TOOL_COMMAND_FORMATS, ToolCommandFormats
 from utils.time_helper import eztime, format_relative_time
+
+
+def format_tool_command(tool_name: str, args: dict, tool_call_format: str = "command") -> str:
+    """Stub retained so merge_tool_calls still formats any stray tool_call events.
+
+    The Professor agent never produces tool_call events, so this path is only
+    hit by legacy serialized data. Return a minimal human-readable string.
+    """
+    try:
+        args_str = " ".join(str(v) for v in (args or {}).values())
+    except Exception:
+        args_str = ""
+    return f"{tool_name} {args_str}".strip()
 
 # TODO deal with this usage...
 # WE NEED SUPER-CENTRALIZE AND NON-MODULE USING THING WHERE WE WILL HAVE OUR NICKNAMES!!!

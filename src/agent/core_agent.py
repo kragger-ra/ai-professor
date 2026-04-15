@@ -10,7 +10,6 @@ tools like !tool 123
 > speak *emotion*
 """
 
-import importlib
 import os
 import re
 import sys
@@ -23,7 +22,6 @@ from typing import Optional
 from agent.base_agent import BaseAgent
 from data_flow.ctx_host import CtxHost
 from data_schema.ctx_structures import CtxSwarmType
-from data_schema.tool_structures import ToolBankType
 
 if __name__ == "__main__":
     module_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -36,19 +34,40 @@ from agent.prompt_generation.prompt_constructor import (
     construct_prompt_messages,
 )
 from agent.rag import RagModel
-from agent.tools import tools_config
 from agent.meta_agent import analyze_context, build_meta_instruction, extract_student_info
-from agent.tools.base_tools import _parse_emotion
 from lecture.student_profiles import StudentProfileManager
 from utils.patterns import BACKCHANNEL_PATTERNS
 from lecture.lecture_delivery import LectureDelivery, prepare_lecture, DELIVERY_SYSTEM_PROMPT
 from agent.humor import try_humor
-from agent.tools.tool_executor import execute_tools
-from agent.tools.tools import execute_tool_query, get_tool_records, default_exec_callaback
 from config_schema.general import get_name
 from utils.debug import bcolors
 from data_flow.ctx_handler import CtxHandler
 from utils.debug import print_messages
+
+
+_EMOTION_NAMES = (
+    "neutral|happy|thoughtful|encouraging|sad|angry|scared|whispering|disgusted|sarcastic"
+)
+_EMOTION_PAREN_TAIL_RE = re.compile(rf'\(({_EMOTION_NAMES})\)\s*$', re.IGNORECASE)
+_EMOTION_STAR_RE = re.compile(rf'\*({_EMOTION_NAMES})\*', re.IGNORECASE)
+
+
+def _parse_emotion(comment: str) -> tuple:
+    """Extract an emotion tag, returning ``(emotion, text)``.
+
+    Supports ``(happy)`` trailing parens and legacy ``*happy*`` inline markers.
+    Inlined from the deleted agent/tools/base_tools.py.
+    """
+    if not comment:
+        return "", comment or ""
+    m = _EMOTION_PAREN_TAIL_RE.search(comment)
+    if m:
+        return m.group(1).lower(), comment[:m.start()].rstrip()
+    tags = _EMOTION_STAR_RE.findall(comment)
+    if tags:
+        cleaned = _EMOTION_STAR_RE.sub('', comment).strip()
+        return tags[-1].lower(), cleaned
+    return "", comment
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
 
@@ -107,7 +126,6 @@ class CoreAgent(BaseAgent):
         ctx_swarm: CtxSwarmType,
         ctx_handler: Optional[CtxHandler] = None,
         ctx_host: Optional[CtxHost] = None,
-        tool_bank: Optional[ToolBankType] = None,
     ):
         """Initialize the agent with context swarm"""
         super().__init__(ctx_swarm, ctx_handler)
@@ -177,15 +195,8 @@ class CoreAgent(BaseAgent):
         self._lecture_paused = False         # student said "stop/wait"
         self._lecture_last_handled_ts = 0    # timestamp of last handled student msg
 
-        if tool_bank is not None:
-            self.tool_bank = tool_bank
-        else:
-            self.tool_bank = tools_config.init_tools_module(
-                ctx_swarm, self.ctx_handler, new_llm=self.llm
-            )
-        print("tool bank init")
         if ctx_host is None:
-            self.ctx_host = CtxHost(ctx_handler, tool_bank=self.tool_bank)
+            self.ctx_host = CtxHost(ctx_handler)
         else:
             self.ctx_host = ctx_host
         self.initialized = True
@@ -215,18 +226,12 @@ class CoreAgent(BaseAgent):
             del self.rag_model
         if hasattr(self, "ctx_host"):
             del self.ctx_host
-        # Reset tools config globals
-        importlib.reload(tools_config)
 
     def reload(self):
-        """Safely reload the agent and tools"""
+        """Safely reload the agent"""
+        import importlib
         with self.cleanup_context():
-            # Reload all dependent modules
-            importlib.reload(sys.modules["agent.tools.tools"])
-            importlib.reload(sys.modules["agent.tools.tools_config"])
             importlib.reload(sys.modules[__name__])
-
-            # Reinitialize
             self.__init__(self.ctx_swarm, self.ctx_handler)
 
     def stop(self):
@@ -789,21 +794,19 @@ class CoreAgent(BaseAgent):
             if self._use_local_llm and self._cached_prompt_constructor:
                 # LM Studio path: use CachedPromptConstructor for optimal KV caching
                 messages, response_starting = construct_prompt_messages(
-                    get_tool_records(),
+                    [],
                     self.ctx_handler,
                     rag_model=self.rag_model,
                     output_format="dicts",  # LM Studio uses OpenAI dicts
-                    tool_use_format="command",
                     wait_for_trigger=_wait,
                 )
             else:
                 # Mistral API path: original behavior
                 messages, response_starting = construct_prompt_messages(
-                    get_tool_records(),
+                    [],
                     self.ctx_handler,
                     rag_model=self.rag_model,
                     output_format="langchain",
-                    tool_use_format="command",
                     wait_for_trigger=_wait,
                 )
             if messages is None:
