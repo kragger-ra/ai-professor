@@ -1,29 +1,37 @@
+"""Vosk TTS queue handler with sentence-level prefetch and interrupts.
+
+Single backend: Vosk. The ``TTS_BACKEND`` env var is still read so ops can
+confirm what is running, but any non-``vosk`` value is ignored and logged.
+"""
+
 import concurrent.futures
 import logging
 import os
-import random
 import time
 import traceback
 from threading import Thread
-from typing import Optional, Tuple
+from typing import Optional
 
 from tts.audio_device import AudioProcessor
+from tts.vosk.vosk_tts import (
+    generate_silence,
+    split_sentences,
+    vosk_tts_sentence,
+)
 
-_TTS_BACKEND = os.getenv("TTS_BACKEND", "fish")
-
-if _TTS_BACKEND == "vosk":
-    from tts.vosk.vosk_tts import vosk_tts_emo as fish_tts_emo
-    from tts.vosk.vosk_tts import split_sentences, generate_silence, vosk_tts_sentence
-elif _TTS_BACKEND == "piper":
-    from tts.piper.piper_tts import piper_tts_emo as fish_tts_emo
-else:
-    from tts.fish.fish_gr import fish_tts_emo
+_TTS_BACKEND = os.getenv("TTS_BACKEND", "vosk")
+if _TTS_BACKEND != "vosk":
+    logging.getLogger("tts-handler").warning(
+        f"[TTS] TTS_BACKEND={_TTS_BACKEND!r} is not supported; using vosk"
+    )
 
 log = logging.getLogger("tts-handler")
 
-# [`neutral`, `happy`, `sad`, `angry`, `scared`, `whispering`, `disgusted`, `sarcastic`]
-# from agent/tools.py
 MAX_AUDIO_ALLOWED_TIME = 60  # seconds per TTS utterance
+INTRA_SENTENCE_PAUSE_S = 0.18
+INTER_ITEM_PAUSE_S = 0.35
+QUEUE_OVERFLOW_LIMIT = 10
+QUEUE_OVERFLOW_KEEP = 3
 
 
 def _is_interrupt(tts_dict: dict) -> bool:
@@ -43,76 +51,38 @@ def _check_for_interrupt(tts_queue) -> bool:
     return False
 
 
-def _wait_playback(audio_processor, ctx_swarm, audio, sr):
-    """Monitor playback with interrupt checks (original behavior for fish/piper)."""
-    chunk_size = 2048
-    audio_samples_len = len(audio)
-    full_audio_time = audio_samples_len / sr
-    tts_queue = ctx_swarm["tts_queue"]
-
-    if full_audio_time > MAX_AUDIO_ALLOWED_TIME:
-        print(f"[TTS WARNING] Audio ({full_audio_time:.1f}s) exceeds limit, will cut at {MAX_AUDIO_ALLOWED_TIME}s")
-
-    audio_played_time = 0
-    print(f"[TTS] playing audio for {full_audio_time:.1f}s")
-    for i in range(0, audio_samples_len, chunk_size):
-        if _check_for_interrupt(tts_queue):
-            print("VOICE INTERRUPTED!!!")
-            audio_processor.interrupt_main_device()
-            return
-        this_chunk_time = chunk_size / sr
-        audio_played_time += this_chunk_time
-        if audio_played_time > MAX_AUDIO_ALLOWED_TIME:
-            print("VOICE INTERRUPTED BY TIME!!!")
-            audio_processor.interrupt_main_device()
-            return
-        time.sleep(this_chunk_time)
-
-
 def check_tts_queue(
     audio_processor, ctx_swarm, check_interrupt=False
 ) -> Optional[bool]:
-    """Process TTS queue. For vosk backend, delegates to streaming handler."""
+    """Process one batch of pending TTS items via the vosk streaming handler."""
     tts_queue = ctx_swarm["tts_queue"]
-    if len(tts_queue) > 0:
-        try:
-            tts_dict = tts_queue[0]
-            if tts_dict:
-                if _is_interrupt(tts_dict):
-                    tts_queue.pop(0)
-                    if check_interrupt:
-                        return True
-                else:
-                    if check_interrupt:
-                        return False
-
-                    # Vosk: queue-level prefetch streaming
-                    if _TTS_BACKEND == "vosk":
-                        _handle_vosk_queue_stream(audio_processor, ctx_swarm)
-                        if check_interrupt:
-                            return False
-                        return None
-
-                    # Fish/Piper: original batch behavior
-                    tts_dict = tts_queue.pop(0)
-                    ctx_swarm["voice"]["speak_entry"] = tts_dict
-                    ctx_swarm["voice"]["text_chunk"] = tts_dict["text"]
-                    audio, sr = fish_tts_emo(tts_dict)
-                    audio_processor.play_sound(audio, sr, blocking=False)
-                    ctx_swarm["voice"]["is_speaking"] = True
-                    _wait_playback(audio_processor, ctx_swarm, audio, sr)
-                    ctx_swarm["voice"]["is_speaking"] = False
-                    ctx_swarm["voice"]["text_chunk"] = ""
-        except Exception as e:
-            print("ERROR AUDIO GENERATE =(", e)
-            traceback.print_exc()
-            time.sleep(10)
-            if check_interrupt:
-                return False
+    if len(tts_queue) == 0:
         if check_interrupt:
             return False
+        return None
+
+    try:
+        head = tts_queue[0]
+        if not head:
+            if check_interrupt:
+                return False
+            return None
+
+        if _is_interrupt(head):
+            tts_queue.pop(0)
+            return True if check_interrupt else None
+
+        if check_interrupt:
+            return False
+
+        _handle_vosk_queue_stream(audio_processor, ctx_swarm)
+    except Exception as e:
+        print("ERROR AUDIO GENERATE =(", e)
+        traceback.print_exc()
+        time.sleep(10)
     if check_interrupt:
         return False
+    return None
 
 
 # =========================================================================
@@ -135,8 +105,8 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
     ctx_swarm["voice"]["is_speaking"] = True
 
     # Queue overflow protection
-    if len(tts_queue) > 10:
-        overflow_count = len(tts_queue) - 3
+    if len(tts_queue) > QUEUE_OVERFLOW_LIMIT:
+        overflow_count = len(tts_queue) - QUEUE_OVERFLOW_KEEP
         for _ in range(overflow_count):
             tts_queue.pop(0)
         log.warning(f"[TTS] Queue overflow! Dropped {overflow_count} items")
@@ -200,12 +170,10 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
 
             # Micro-pause between sentences for natural pacing
             if si + 1 < len(sentences):
-                # Within same TTS item — short pause
-                pause_audio, pause_sr = generate_silence(0.18)
+                pause_audio, pause_sr = generate_silence(INTRA_SENTENCE_PAUSE_S)
                 audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
             elif len(tts_queue) > 0 and not _is_interrupt(tts_queue[0]):
-                # Between TTS items (different LLM ideas) — longer pause
-                pause_audio, pause_sr = generate_silence(0.35)
+                pause_audio, pause_sr = generate_silence(INTER_ITEM_PAUSE_S)
                 audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
 
             log.info(f"[TTS] #{played} audio: {audio_dur:.1f}s | '{sentence[:50]}'")
@@ -215,9 +183,6 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
     executor.shutdown(wait=False)
     total_ms = (time.perf_counter() - total_t0) * 1000
     log.info(f"[TTS] Queue drained: {played} sentences, {total_ms:.0f}ms total")
-
-    ctx_swarm["voice"]["is_speaking"] = False
-    ctx_swarm["voice"]["text_chunk"] = ""
 
 
 def simple_tts_handler(ctx_swarm):
@@ -241,15 +206,14 @@ def tts_queue_handler(audio_processor, ctx_env, ctx_swarm):
 
 def fx_sound_handler(audio_processor: AudioProcessor, ctx_swarm):
     fx_queue = ctx_swarm.get("fx_queue", None)
-    if fx_queue:
-        ctx_env = ctx_swarm["env"]
-        while ctx_env["actived"]:
-            # yield
-            # return None, None, "🟡 Generating, GOT QUEUE ITEM " + str(fx_queue.pop(0))
-            try:
-                sound_name = fx_queue.get()
-                audio_processor.play_fx(sound_name)
-            except Exception as e:
-                print("ERROR FX PLAY =(", e)
-                time.sleep(10)
-            time.sleep(0.1)
+    if not fx_queue:
+        return
+    ctx_env = ctx_swarm["env"]
+    while ctx_env["actived"]:
+        try:
+            sound_name = fx_queue.get()
+            audio_processor.play_fx(sound_name)
+        except Exception as e:
+            print("ERROR FX PLAY =(", e)
+            time.sleep(10)
+        time.sleep(0.1)
