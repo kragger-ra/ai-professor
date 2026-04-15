@@ -34,6 +34,7 @@ from agent.prompt_generation.prompt_constructor import (
     construct_prompt_messages,
 )
 from agent.rag import RagModel
+from agent.streaming_orchestrator import stream_response_sentences
 from agent.meta_agent import analyze_context, build_meta_instruction, extract_student_info
 from lecture.student_profiles import StudentProfileManager
 from utils.patterns import BACKCHANNEL_PATTERNS
@@ -53,10 +54,9 @@ _EMOTION_STAR_RE = re.compile(rf'\*({_EMOTION_NAMES})\*', re.IGNORECASE)
 
 
 def _parse_emotion(comment: str) -> tuple:
-    """Extract an emotion tag, returning ``(emotion, text)``.
+    """Extract emotion tag from the end of a sentence, returning (emotion, text).
 
     Supports ``(happy)`` trailing parens and legacy ``*happy*`` inline markers.
-    Inlined from the deleted agent/tools/base_tools.py.
     """
     if not comment:
         return "", comment or ""
@@ -70,6 +70,28 @@ def _parse_emotion(comment: str) -> tuple:
     return "", comment
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
+
+# Core timing/budget constants (extracted from scattered literals)
+LECTURE_STREAM_TIMEOUT_S = 25           # hard cap per lecture block stream
+LECTURE_BLOCK_MAX_TOKENS = 300
+LECTURE_QA_MAX_TOKENS = 200
+LECTURE_TEMPERATURE = 0.6
+LECTURE_QA_TEMPERATURE = 0.5
+RESPONSE_MAX_TOKENS_SHORT = 150         # used for short student messages (<25 chars)
+RESPONSE_MAX_TOKENS_LONG = 500
+RESPONSE_TEMPERATURE_LOW = 0.4
+RESPONSE_TEMPERATURE_HIGH = 0.75
+TTS_POLL_INTERVAL_S = 0.3
+STT_POLL_INTERVAL_S = 0.2
+INTER_BLOCK_PAUSE_S = 3
+POST_INTERRUPT_PAUSE_S = 2
+CHECK_QUESTION_DELAY_S = 1.5
+POST_INTERRUPT_REENTRY_PAUSE_S = 1.0
+AGENT_ERROR_BACKOFF_S = 3
+BREAK_REMINDER_THRESHOLD_S = 3600       # 60 min
+SILENCE_HINT_SHORT_S = 10
+SILENCE_HINT_LONG_S = 30
+STREAM_TOKEN_TIMEOUT_S = 10             # per-token idle timeout in streaming_orchestrator
 
 
 def _agent_log(msg):
@@ -140,7 +162,6 @@ class CoreAgent(BaseAgent):
 
         # LM Studio client (local LLM with prompt caching + heartbeat)
         self._lm_studio_client = None
-        self._cached_prompt_constructor = None
         if self._use_local_llm:
             try:
                 from agent.lm_studio_client import get_lm_studio_client
@@ -161,12 +182,6 @@ class CoreAgent(BaseAgent):
             traceback.print_exc()
             self.rag_model = None
             print("[CoreAgent] Continuing without RAG model, setting it to None.")
-
-        # Cached prompt constructor for LM Studio (initialized after ctx_handler)
-        if self._use_local_llm:
-            from agent.prompt_generation.cached_prompt_constructor import CachedPromptConstructor
-            self._cached_prompt_constructor = CachedPromptConstructor(self.ctx_handler)
-            print("[CoreAgent] CachedPromptConstructor initialized for LM Studio")
 
         # Student profiles
         try:
@@ -355,6 +370,24 @@ class CoreAgent(BaseAgent):
         except Exception as e:
             print(f"[META] Profile update error: {e}")
 
+    def _signal_interrupt(self) -> None:
+        """Clear the TTS queue and push an interrupt sentinel.
+
+        Central helper for the pattern repeated across step() / lecture flow
+        whenever the student preempts ongoing speech.
+        """
+        tts_q = self.ctx_swarm["tts_queue"]
+        if len(tts_q) > 0:
+            tts_q[:] = []
+        tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+
+    def _build_system_msg(self, content: str):
+        """Construct a system message in the format expected by the active LLM backend."""
+        if self._use_local_llm:
+            return {"role": "system", "content": content}
+        from langchain_core.messages import SystemMessage
+        return SystemMessage(content=content)
+
     @staticmethod
     def _to_dicts(messages) -> list:
         """Convert langchain messages to plain dicts for litellm."""
@@ -507,8 +540,6 @@ class CoreAgent(BaseAgent):
 
     def _lecture_step(self):
         """One iteration of lecture delivery loop."""
-        from agent.streaming_orchestrator import stream_response_sentences
-
         delivery = self._lecture_delivery
         if not delivery or not delivery.active:
             self._send_to_tts("На этом лекция закончена. Есть вопросы по всему материалу?")
@@ -539,20 +570,20 @@ class CoreAgent(BaseAgent):
         _agent_log("[LECTURE] Starting LLM stream...")
         _lec_sentence_count = 0
         _lec_stream_start = time.time()
-        _LEC_MAX_STREAM = 25  # hard cap for lecture block stream
-        for sentence in stream_response_sentences(messages, temperature=0.6, max_tokens=300):
+        for sentence in stream_response_sentences(
+            messages,
+            temperature=LECTURE_TEMPERATURE,
+            max_tokens=LECTURE_BLOCK_MAX_TOKENS,
+        ):
             _lec_sentence_count += 1
             _agent_log(f"[LECTURE] sentence #{_lec_sentence_count}: '{sentence[:60]}'")
-
-            # During lecture: DON'T interrupt stream on background Zoom voices.
-            # Interrupts are handled in the inter-block pause instead.
 
             spoken_sentences.append(sentence)
             self._send_to_tts(sentence)
 
             # Hard timeout for the entire block
-            if time.time() - _lec_stream_start > _LEC_MAX_STREAM:
-                _agent_log(f"[LECTURE] Block stream timeout ({_LEC_MAX_STREAM}s)")
+            if time.time() - _lec_stream_start > LECTURE_STREAM_TIMEOUT_S:
+                _agent_log(f"[LECTURE] Block stream timeout ({LECTURE_STREAM_TIMEOUT_S}s)")
                 break
         _agent_log(f"[LECTURE] Stream done: {_lec_sentence_count} sentences")
 
@@ -593,7 +624,7 @@ class CoreAgent(BaseAgent):
             if not _tts_q_logged:
                 _agent_log(f"[LECTURE] Waiting for TTS queue ({len(self.ctx_swarm['tts_queue'])} items)")
                 _tts_q_logged = True
-            time.sleep(0.3)
+            time.sleep(TTS_POLL_INTERVAL_S)
 
         # Advance to next block
         delivery.advance()
@@ -601,7 +632,7 @@ class CoreAgent(BaseAgent):
         # Check question if the block has one
         check_q = block.get("check_question")
         if check_q:
-            time.sleep(1.5)
+            time.sleep(CHECK_QUESTION_DELAY_S)
             self._send_to_tts(check_q)
             self._save_to_history(check_q)
             self._lecture_waiting_reply = True
@@ -610,8 +641,8 @@ class CoreAgent(BaseAgent):
             self._last_response_time = time.time()
             return
 
-        # Inter-block pause: listen for 3 seconds
-        time.sleep(3)
+        # Inter-block pause: listen for student
+        time.sleep(INTER_BLOCK_PAUSE_S)
 
         # Check if student said something during the pause
         if len(self.ctx_handler.ctx_chat) > _chat_len_before:
@@ -669,7 +700,6 @@ class CoreAgent(BaseAgent):
 
         # Any other speech = question → answer separately with RAG
         _agent_log(f"[LECTURE] Answering question: '{student_msg[:60]}'")
-        from agent.streaming_orchestrator import stream_response_sentences
 
         rag_context = ""
         if self.rag_model:
@@ -692,7 +722,11 @@ class CoreAgent(BaseAgent):
         ]
 
         answer_sentences = []
-        for sentence in stream_response_sentences(messages, temperature=0.5, max_tokens=200):
+        for sentence in stream_response_sentences(
+            messages,
+            temperature=LECTURE_QA_TEMPERATURE,
+            max_tokens=LECTURE_QA_MAX_TOKENS,
+        ):
             answer_sentences.append(sentence)
             self._send_to_tts(sentence)
 
@@ -702,7 +736,7 @@ class CoreAgent(BaseAgent):
             _agent_log(f"[LECTURE] Answered: {len(answer_sentences)} sentences")
 
         # Brief pause then continue lecture from where we stopped
-        time.sleep(2)
+        time.sleep(POST_INTERRUPT_PAUSE_S)
         self._send_to_tts("Продолжаем.")
         _agent_log("[LECTURE] Resuming after question")
 
@@ -751,7 +785,7 @@ class CoreAgent(BaseAgent):
                 except Exception as e:
                     _agent_log(f"[LECTURE] ERROR in _lecture_step: {e}")
                     traceback.print_exc()
-                    time.sleep(3)
+                    time.sleep(AGENT_ERROR_BACKOFF_S)
                 return
 
             # (lecture question answering is now handled inline in _handle_lecture_interrupt)
@@ -762,23 +796,22 @@ class CoreAgent(BaseAgent):
                   f"tts_queue_len={len(self.ctx_swarm['tts_queue'])}")
 
             import random
-            from agent.streaming_orchestrator import stream_response_sentences
 
             # Break reminder (feature 4): once after 60 min
-            if not self._break_suggested and (time.time() - self._session_start_time) > 3600:
+            if not self._break_suggested and (time.time() - self._session_start_time) > BREAK_REMINDER_THRESHOLD_S:
                 self._send_to_tts("Мы общаемся уже больше часа. Может, сделаем небольшой перерыв минут на пять?")
                 self._break_suggested = True
 
             # Silence timer (feature 3): check before waiting for trigger
             if self._waiting_for_reply and self._last_response_time > 0:
                 silence_duration = time.time() - self._last_response_time
-                if silence_duration > 30 and self._silence_hint_sent:
+                if silence_duration > SILENCE_HINT_LONG_S and self._silence_hint_sent:
                     self._send_to_tts("Ладно, пойдём дальше. Вернёмся к этому позже.")
                     self._waiting_for_reply = False
                     self._silence_hint_sent = False
                     self._last_response_time = time.time()
                     return
-                elif silence_duration > 10 and not self._silence_hint_sent:
+                elif silence_duration > SILENCE_HINT_SHORT_S and not self._silence_hint_sent:
                     self._send_to_tts("Подумай не спеша, я подожду.")
                     self._silence_hint_sent = True
                     return
@@ -788,35 +821,22 @@ class CoreAgent(BaseAgent):
             _wait = not self._interrupted
             self._interrupted = False
             if not _wait:
-                time.sleep(1.0)  # brief pause for STT to finish
+                time.sleep(POST_INTERRUPT_REENTRY_PAUSE_S)
                 print("[AGENT] Re-entering after interrupt (no wait)")
 
-            if self._use_local_llm and self._cached_prompt_constructor:
-                # LM Studio path: use CachedPromptConstructor for optimal KV caching
-                messages, response_starting = construct_prompt_messages(
-                    [],
-                    self.ctx_handler,
-                    rag_model=self.rag_model,
-                    output_format="dicts",  # LM Studio uses OpenAI dicts
-                    wait_for_trigger=_wait,
-                )
-            else:
-                # Mistral API path: original behavior
-                messages, response_starting = construct_prompt_messages(
-                    [],
-                    self.ctx_handler,
-                    rag_model=self.rag_model,
-                    output_format="langchain",
-                    wait_for_trigger=_wait,
-                )
+            _output_format = "dicts" if self._use_local_llm else "langchain"
+            messages, response_starting = construct_prompt_messages(
+                [],
+                self.ctx_handler,
+                rag_model=self.rag_model,
+                output_format=_output_format,
+                wait_for_trigger=_wait,
+            )
             if messages is None:
                 return
 
             # Interrupt: new trigger arrived — stop any ongoing TTS playback
-            tts_q = self.ctx_swarm["tts_queue"]
-            if len(tts_q) > 0:
-                tts_q[:] = []
-            tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+            self._signal_interrupt()
             print("[AGENT] Cleared TTS queue for new response")
 
             # 2. Get latest student message
@@ -850,29 +870,21 @@ class CoreAgent(BaseAgent):
             if self._current_student and self._profile_mgr:
                 profile_text = self._profile_mgr.get_profile_for_prompt(self._current_student)
                 if profile_text:
-                    if self._use_local_llm:
-                        # Dict format for LM Studio
-                        messages.insert(-1, {"role": "system", "content": f"Профиль студента: {profile_text}"})
-                    else:
-                        from langchain_core.messages import SystemMessage as _SM
-                        messages.insert(-1, _SM(content=f"Профиль студента: {profile_text}"))
+                    messages.insert(-1, self._build_system_msg(f"Профиль студента: {profile_text}"))
 
             # 3.5 Inject live lecture context if student asks about the lecture
             lecture_summary = self.ctx_swarm["env"].get("lecture_summary", "")
             if lecture_summary and any(q in last_student_msg.lower() for q in self._LECTURE_QUERIES):
                 _lec_content = "КОНСПЕКТ ТЕКУЩЕЙ ЛЕКЦИИ (используй для ответа):\n" + lecture_summary
-                if self._use_local_llm:
-                    messages.insert(1, {"role": "system", "content": _lec_content})
-                else:
-                    from langchain_core.messages import SystemMessage as _SM
-                    messages.insert(1, _SM(content=_lec_content))
+                messages.insert(1, self._build_system_msg(_lec_content))
                 print(f"[AGENT] Injected lecture summary ({len(lecture_summary)} chars)")
 
             self.ctx_swarm["fx_queue"].put("thinking")
 
             # 4. STREAM response — sentences go to TTS as they arrive
             # Short messages get fewer tokens to prevent hallucination dumps
-            _max_tokens = 150 if len(last_student_msg) < 25 else 500
+            _max_tokens = (RESPONSE_MAX_TOKENS_SHORT if len(last_student_msg) < 25
+                           else RESPONSE_MAX_TOKENS_LONG)
             t0 = time.perf_counter()
             messages_dicts = messages if self._use_local_llm else self._to_dicts(messages)
             _llm_label = "LM Studio (local)" if self._use_local_llm else "Mistral API"
@@ -885,28 +897,24 @@ class CoreAgent(BaseAgent):
 
             for sentence in stream_response_sentences(
                 messages_dicts,
-                temperature=random.uniform(0.4, 0.75),
+                temperature=random.uniform(RESPONSE_TEMPERATURE_LOW, RESPONSE_TEMPERATURE_HIGH),
                 max_tokens=_max_tokens,
             ):
                 # Check: student started speaking → wait for STT
                 if self.ctx_swarm["voice"].get("student_speaking"):
                     print(f"[AGENT] Student speaking — waiting for STT")
                     interrupted = True
-                    tts_q = self.ctx_swarm["tts_queue"]
-                    tts_q[:] = []
-                    tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+                    self._signal_interrupt()
                     _wait_start = time.time()
                     while self.ctx_swarm["voice"].get("student_speaking") and time.time() - _wait_start < 15:
-                        time.sleep(0.2)
+                        time.sleep(STT_POLL_INTERVAL_S)
                     break
 
                 # Check if student interrupted (new message in ctx_chat)
                 if len(self.ctx_handler.ctx_chat) > _chat_len_before:
                     print(f"[AGENT] Student interrupted — stopping generation")
                     interrupted = True
-                    tts_q = self.ctx_swarm["tts_queue"]
-                    tts_q[:] = []
-                    tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+                    self._signal_interrupt()
                     break
 
                 # Strip greeting from first sentence if already greeted
@@ -975,8 +983,8 @@ class CoreAgent(BaseAgent):
             if not spoken_text and not interrupted:
                 self._retry_count = getattr(self, '_retry_count', 0) + 1
                 if self._retry_count <= 3:
-                    _agent_log(f"[AGENT] Empty response from LLM — retry {self._retry_count}/3 in 3s")
-                    time.sleep(3)
+                    _agent_log(f"[AGENT] Empty response from LLM — retry {self._retry_count}/3")
+                    time.sleep(AGENT_ERROR_BACKOFF_S)
                     self._interrupted = True
                     return
                 else:

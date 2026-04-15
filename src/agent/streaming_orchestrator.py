@@ -1,12 +1,8 @@
 """Streaming orchestrator — LLM token stream → sentence buffer → TTS.
 
-Replaces the batch orchestrator for real-time voice response.
-No classification step — streams directly from fast model.
-Claude Opus runs in background for complex follow-ups.
-
-Supports two fast-brain backends:
-- Mistral API (default): USE_LOCAL_LLM=false or unset
-- LM Studio (local):     USE_LOCAL_LLM=true
+Dispatches token streaming to one of two backends based on ``USE_LOCAL_LLM``:
+- Mistral API via litellm (cloud, default)
+- LM Studio local server (requires running LM Studio)
 """
 
 import os
@@ -18,11 +14,12 @@ from typing import Generator, List, Optional
 import litellm
 
 FAST_MODEL = os.getenv("CORE_LLM_MODEL_NAME", "mistral/mistral-large-latest")
-SMART_MODEL = os.getenv("SMART_LLM_MODEL_NAME", "openai/claude-opus-4.6")
-SMART_MODEL_API_BASE = os.getenv("SMART_LLM_API_BASE", "https://api.awstore.cloud/v1")
-SMART_MODEL_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
+
+STREAM_TOKEN_TIMEOUT_S = 10
+MAX_STREAM_TIME_S = 30
+FORCE_FLUSH_IDLE_S = 8
 
 
 # =========================================================================
@@ -124,7 +121,7 @@ def _stream_to_queue_mistral(messages, temperature, max_tokens, q):
             max_tokens=max_tokens,
             temperature=temperature,
             stream=True,
-            timeout=10,
+            timeout=STREAM_TOKEN_TIMEOUT_S,
             api_base=_effective,
         )
         token_count = 0
@@ -135,14 +132,16 @@ def _stream_to_queue_mistral(messages, temperature, max_tokens, q):
                 token_count += 1
         if token_count == 0:
             print(f"[STREAM] WARNING: 0 tokens received from {FAST_MODEL}", flush=True)
-        q.put(None)  # signal end
     except Exception as e:
         print(f"[STREAM] Error in thread: {e}", flush=True)
+    finally:
         q.put(None)
 
 
 def _stream_to_queue(messages, temperature, max_tokens, q):
-    """Route to LM Studio or Mistral based on USE_LOCAL_LLM flag."""
+    """Dispatch to the configured backend; each backend is responsible for
+    pushing tokens into ``q`` and terminating with ``q.put(None)``.
+    """
     if USE_LOCAL_LLM:
         _stream_to_queue_lm_studio(messages, temperature, max_tokens, q)
     else:
@@ -166,24 +165,22 @@ def stream_fast(messages: list, temperature: float = 0.6,
 
     stream_start = time.time()
     got_first_token = False
-    MAX_STREAM_TIME = 30  # hard cap: 30s max total stream time
 
     while True:
         try:
-            token = q.get(timeout=10)  # 10s hard timeout per chunk
+            token = q.get(timeout=STREAM_TOKEN_TIMEOUT_S)
         except queue.Empty:
             elapsed = time.time() - stream_start
             if not got_first_token:
                 print(f"[STREAM] Connection hang: no first token in {elapsed:.0f}s, aborting", flush=True)
             else:
-                print(f"[STREAM] Timeout: no tokens for 10s, aborting", flush=True)
+                print(f"[STREAM] Timeout: no tokens for {STREAM_TOKEN_TIMEOUT_S}s, aborting", flush=True)
             break
         if token is None:
             print("[STREAM] Stream finished normally", flush=True)
             break
-        # Hard cap on total stream time
-        if time.time() - stream_start > MAX_STREAM_TIME:
-            print(f"[STREAM] Max stream time {MAX_STREAM_TIME}s reached, aborting", flush=True)
+        if time.time() - stream_start > MAX_STREAM_TIME_S:
+            print(f"[STREAM] Max stream time {MAX_STREAM_TIME_S}s reached, aborting", flush=True)
             break
         got_first_token = True
         yield token
@@ -224,9 +221,9 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
             _last_yield_time = time.time()
             yield sentence
 
-        # Force flush if buffer hasn't yielded a sentence in 8s
+        # Force flush if buffer hasn't yielded a sentence in FORCE_FLUSH_IDLE_S
         # (Mistral sometimes generates long text without punctuation)
-        if time.time() - _last_yield_time > 8 and buffer.buffer.strip():
+        if time.time() - _last_yield_time > FORCE_FLUSH_IDLE_S and buffer.buffer.strip():
             forced = buffer.flush()
             if forced:
                 if _trigger and _trigger in forced:
@@ -245,54 +242,3 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
             yield remaining
 
     return full_response
-
-
-# =========================================================================
-# Background smart model (Claude) for optional enhancement
-# =========================================================================
-
-_smart_state = {
-    "running": False,
-    "response": None,
-    "question": None,
-}
-
-
-def launch_smart_background(messages: list, question: str):
-    """Launch Claude Opus in background. Non-blocking."""
-    _smart_state["running"] = True
-    _smart_state["response"] = None
-    _smart_state["question"] = question
-
-    def _think():
-        try:
-            kwargs = {
-                "model": SMART_MODEL, "messages": messages,
-                "max_tokens": 1500, "temperature": 0.5, "stream": False,
-            }
-            if SMART_MODEL_API_BASE:
-                kwargs["api_base"] = SMART_MODEL_API_BASE
-            if SMART_MODEL_API_KEY:
-                kwargs["api_key"] = SMART_MODEL_API_KEY
-            response = litellm.completion(**kwargs)
-            _smart_state["response"] = response.choices[0].message.content
-            print(f"[SMART BG] Ready: {len(_smart_state['response'])} chars")
-        except Exception as e:
-            print(f"[SMART BG] Error: {e}")
-        finally:
-            _smart_state["running"] = False
-
-    threading.Thread(target=_think, daemon=True).start()
-
-
-def get_smart_response() -> Optional[str]:
-    """Get background Claude response if ready. Returns None if not ready."""
-    if _smart_state["running"]:
-        return None
-    return _smart_state.get("response")
-
-
-def clear_smart_state():
-    _smart_state["running"] = False
-    _smart_state["response"] = None
-    _smart_state["question"] = None
