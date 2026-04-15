@@ -50,6 +50,8 @@ from utils.debug import bcolors
 from data_flow.ctx_handler import CtxHandler
 from utils.debug import print_messages
 
+USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
+
 
 def _agent_log(msg):
     """Write agent debug to file (stdout often lost on Windows multiprocessing)."""
@@ -116,6 +118,24 @@ class CoreAgent(BaseAgent):
 
         # Initialize LLM
         self.llm = get_llm_chain()
+        self._use_local_llm = USE_LOCAL_LLM
+
+        # LM Studio client (local LLM with prompt caching + heartbeat)
+        self._lm_studio_client = None
+        self._cached_prompt_constructor = None
+        if self._use_local_llm:
+            try:
+                from agent.lm_studio_client import get_lm_studio_client
+                self._lm_studio_client = get_lm_studio_client()
+                health = self._lm_studio_client.check_health()
+                print(f"[CoreAgent] LM Studio: {health}")
+                if health["status"] != "ok":
+                    print("[CoreAgent] WARNING: LM Studio not ready, falling back to API")
+                    self._use_local_llm = False
+            except Exception as e:
+                print(f"[CoreAgent] LM Studio init error: {e}, falling back to API")
+                self._use_local_llm = False
+
         try:
             self.rag_model = RagModel()
         except Exception as e:
@@ -123,6 +143,12 @@ class CoreAgent(BaseAgent):
             traceback.print_exc()
             self.rag_model = None
             print("[CoreAgent] Continuing without RAG model, setting it to None.")
+
+        # Cached prompt constructor for LM Studio (initialized after ctx_handler)
+        if self._use_local_llm:
+            from agent.prompt_generation.cached_prompt_constructor import CachedPromptConstructor
+            self._cached_prompt_constructor = CachedPromptConstructor(self.ctx_handler)
+            print("[CoreAgent] CachedPromptConstructor initialized for LM Studio")
 
         # Student profiles
         try:
@@ -176,6 +202,13 @@ class CoreAgent(BaseAgent):
         """Clean up resources"""
         if self.running:
             self.stop()
+        # Shutdown LM Studio client heartbeat
+        if hasattr(self, "_lm_studio_client") and self._lm_studio_client:
+            try:
+                from agent.lm_studio_client import shutdown_lm_studio_client
+                shutdown_lm_studio_client()
+            except Exception:
+                pass
         if hasattr(self, "llm"):
             del self.llm
         if hasattr(self, "rag_model"):
@@ -506,28 +539,8 @@ class CoreAgent(BaseAgent):
             _lec_sentence_count += 1
             _agent_log(f"[LECTURE] sentence #{_lec_sentence_count}: '{sentence[:60]}'")
 
-            # Check: student started speaking → stop immediately, wait for STT
-            if self.ctx_swarm["voice"].get("student_speaking"):
-                _agent_log("[LECTURE] Student speaking — pausing stream, waiting for STT")
-                interrupted = True
-                tts_q = self.ctx_swarm["tts_queue"]
-                tts_q[:] = []
-                tts_q.append({"text": "interrupt", "emotion": "interrupt"})
-                # Wait until STT finishes (student_speaking becomes False)
-                _wait_start = time.time()
-                while self.ctx_swarm["voice"].get("student_speaking") and time.time() - _wait_start < 15:
-                    time.sleep(0.2)
-                _agent_log("[LECTURE] STT finished, processing student input")
-                break
-
-            # Check for new message in ctx_chat (fallback)
-            if len(self.ctx_handler.ctx_chat) > _chat_len_before:
-                _agent_log("[LECTURE] Student interrupted (ctx_chat)")
-                interrupted = True
-                tts_q = self.ctx_swarm["tts_queue"]
-                tts_q[:] = []
-                tts_q.append({"text": "interrupt", "emotion": "interrupt"})
-                break
+            # During lecture: DON'T interrupt stream on background Zoom voices.
+            # Interrupts are handled in the inter-block pause instead.
 
             spoken_sentences.append(sentence)
             self._send_to_tts(sentence)
@@ -539,6 +552,24 @@ class CoreAgent(BaseAgent):
         _agent_log(f"[LECTURE] Stream done: {_lec_sentence_count} sentences")
 
         spoken_text = " ".join(spoken_sentences).strip()
+
+        # Humor injection in lecture blocks
+        if not interrupted and spoken_text and _lec_sentence_count >= 2:
+            _topic = " ".join(block.get("key_points", [])[:1])[:100] or "лекция"
+            _meta = getattr(self, '_last_meta_result', {}) or {"mood": "спокоен", "request_type": "теория"}
+            _interactions = 5  # lecture = familiar context
+            _with_humor = try_humor(
+                response_text=spoken_text, topic=_topic,
+                meta_result=_meta, student_msg="",
+                student_interactions=_interactions,
+            )
+            if _with_humor != spoken_text:
+                _humor_line = _with_humor.replace(spoken_text, "").strip()
+                if _humor_line:
+                    self._send_to_tts(_humor_line)
+                    spoken_text = _with_humor
+                    _agent_log(f"[HUMOR] Injected in lecture block: '{_humor_line[:60]}'")
+
         if spoken_text:
             self._save_to_history(spoken_text + (" [прервано студентом]" if interrupted else ""))
 
@@ -557,15 +588,6 @@ class CoreAgent(BaseAgent):
             if not _tts_q_logged:
                 _agent_log(f"[LECTURE] Waiting for TTS queue ({len(self.ctx_swarm['tts_queue'])} items)")
                 _tts_q_logged = True
-            # Check if student interrupts during playback
-            if self.ctx_swarm["voice"].get("student_speaking"):
-                _agent_log("[LECTURE] Student spoke during TTS playback — waiting for STT")
-                while self.ctx_swarm["voice"].get("student_speaking") and time.time() - _tts_wait_start < 120:
-                    time.sleep(0.2)
-                # Update baseline and handle interrupt
-                _chat_len_before = len(self.ctx_handler.ctx_chat)
-                self._handle_lecture_interrupt()
-                return
             time.sleep(0.3)
 
         # Advance to next block
@@ -620,6 +642,17 @@ class CoreAgent(BaseAgent):
         # Backchannel — resume
         if msg_lower in BACKCHANNEL_PATTERNS:
             _agent_log("[LECTURE] Backchannel, resuming")
+            return
+
+        # During lecture: only respond if addressed to professor or is a clear question
+        _PROFESSOR_NAMES = ["профессор", "преподаватель", "препод"]
+        _is_addressed = any(n in msg_lower for n in _PROFESSOR_NAMES)
+        _is_question = msg_lower.rstrip().endswith("?") or any(w in msg_lower for w in [
+            "что такое", "как работает", "зачем", "почему", "можно ли",
+            "объясни", "расскажи", "не понял", "повтори",
+        ])
+        if not _is_addressed and not _is_question:
+            _agent_log(f"[LECTURE] Not addressed to professor, ignoring: '{student_msg[:50]}'")
             return
 
         # Repeat / didn't understand
@@ -752,14 +785,27 @@ class CoreAgent(BaseAgent):
             if not _wait:
                 time.sleep(1.0)  # brief pause for STT to finish
                 print("[AGENT] Re-entering after interrupt (no wait)")
-            messages, response_starting = construct_prompt_messages(
-                get_tool_records(),
-                self.ctx_handler,
-                rag_model=self.rag_model,
-                output_format="langchain",
-                tool_use_format="command",
-                wait_for_trigger=_wait,
-            )
+
+            if self._use_local_llm and self._cached_prompt_constructor:
+                # LM Studio path: use CachedPromptConstructor for optimal KV caching
+                messages, response_starting = construct_prompt_messages(
+                    get_tool_records(),
+                    self.ctx_handler,
+                    rag_model=self.rag_model,
+                    output_format="dicts",  # LM Studio uses OpenAI dicts
+                    tool_use_format="command",
+                    wait_for_trigger=_wait,
+                )
+            else:
+                # Mistral API path: original behavior
+                messages, response_starting = construct_prompt_messages(
+                    get_tool_records(),
+                    self.ctx_handler,
+                    rag_model=self.rag_model,
+                    output_format="langchain",
+                    tool_use_format="command",
+                    wait_for_trigger=_wait,
+                )
             if messages is None:
                 return
 
@@ -801,16 +847,22 @@ class CoreAgent(BaseAgent):
             if self._current_student and self._profile_mgr:
                 profile_text = self._profile_mgr.get_profile_for_prompt(self._current_student)
                 if profile_text:
-                    from langchain_core.messages import SystemMessage as _SM
-                    messages.insert(-1, _SM(content=f"Профиль студента: {profile_text}"))
+                    if self._use_local_llm:
+                        # Dict format for LM Studio
+                        messages.insert(-1, {"role": "system", "content": f"Профиль студента: {profile_text}"})
+                    else:
+                        from langchain_core.messages import SystemMessage as _SM
+                        messages.insert(-1, _SM(content=f"Профиль студента: {profile_text}"))
 
             # 3.5 Inject live lecture context if student asks about the lecture
             lecture_summary = self.ctx_swarm["env"].get("lecture_summary", "")
             if lecture_summary and any(q in last_student_msg.lower() for q in self._LECTURE_QUERIES):
-                from langchain_core.messages import SystemMessage as _SM
-                messages.insert(1, _SM(content=(
-                    "КОНСПЕКТ ТЕКУЩЕЙ ЛЕКЦИИ (используй для ответа):\n" + lecture_summary
-                )))
+                _lec_content = "КОНСПЕКТ ТЕКУЩЕЙ ЛЕКЦИИ (используй для ответа):\n" + lecture_summary
+                if self._use_local_llm:
+                    messages.insert(1, {"role": "system", "content": _lec_content})
+                else:
+                    from langchain_core.messages import SystemMessage as _SM
+                    messages.insert(1, _SM(content=_lec_content))
                 print(f"[AGENT] Injected lecture summary ({len(lecture_summary)} chars)")
 
             self.ctx_swarm["fx_queue"].put("thinking")
@@ -819,8 +871,9 @@ class CoreAgent(BaseAgent):
             # Short messages get fewer tokens to prevent hallucination dumps
             _max_tokens = 150 if len(last_student_msg) < 25 else 500
             t0 = time.perf_counter()
-            messages_dicts = self._to_dicts(messages)
-            _agent_log(f"[AGENT] Starting LLM stream (max_tokens={_max_tokens}, "
+            messages_dicts = messages if self._use_local_llm else self._to_dicts(messages)
+            _llm_label = "LM Studio (local)" if self._use_local_llm else "Mistral API"
+            _agent_log(f"[AGENT] Starting LLM stream via {_llm_label} (max_tokens={_max_tokens}, "
                   f"msg='{last_student_msg[:50]}')")
             spoken_sentences = []   # sentences actually sent to TTS
             sentence_count = 0
@@ -879,7 +932,8 @@ class CoreAgent(BaseAgent):
             spoken_text = " ".join(spoken_sentences).strip()
 
             # 5. Humor injection (after streaming, before history save)
-            if not interrupted and spoken_text and sentence_count >= 2:
+            # Disabled for local LLM — humor module duplicates the response
+            if not self._use_local_llm and not interrupted and spoken_text and sentence_count >= 2:
                 _topic = last_student_msg[:100] if last_student_msg else "общая тема"
                 _student_interactions = 0
                 if self._current_student and self._profile_mgr:

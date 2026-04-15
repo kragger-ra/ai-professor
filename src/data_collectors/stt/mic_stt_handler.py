@@ -212,20 +212,26 @@ def mic_stt_handler(
                         speech_buffer.clear()
                         silence_count = 0
                         _stt_log(f"[MIC-STT] Speech started (RMS={rms:.0f})")
-                        # IMMEDIATE interrupt: stop TTS + signal agent to pause
-                        tts_q = ctx_swarm["tts_queue"]
-                        tts_q[:] = []
-                        tts_q.append({"text": "interrupt", "emotion": "interrupt"})
-                        ctx_swarm["voice"]["student_speaking"] = True
-                        _stt_log("[MIC-STT] Immediate TTS interrupt + student_speaking=True")
+                        # Signal that someone started speaking
+                        # Don't interrupt TTS here — wait for SPEECH_MIN_BLOCKS
+                        # to filter out short noise bursts
+                        pass
                     speech_buffer.append(audio_chunk.copy())
                     silence_count = 0
                 else:
                     if is_speaking:
                         speech_buffer.append(audio_chunk.copy())
                         silence_count += 1
+                        # Interrupt TTS after sustained speech (not just a blip)
+                        if len(speech_buffer) == SPEECH_MIN_BLOCKS:
+                            tts_q = ctx_swarm["tts_queue"]
+                            tts_q[:] = []
+                            tts_q.append({"text": "interrupt", "emotion": "interrupt"})
+                            ctx_swarm["voice"]["student_speaking"] = True
+                            _stt_log(f"[MIC-STT] TTS interrupt after {SPEECH_MIN_BLOCKS} blocks of speech")
+
                         if silence_count >= SILENCE_AFTER_SPEECH_BLOCKS:
-                            # Speech ended — clear student_speaking after transcription
+                            # Speech ended
                             is_speaking = False
                             if len(speech_buffer) >= SPEECH_MIN_BLOCKS:
                                 _transcribe_and_accumulate(

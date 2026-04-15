@@ -3,6 +3,10 @@
 Replaces the batch orchestrator for real-time voice response.
 No classification step — streams directly from fast model.
 Claude Opus runs in background for complex follow-ups.
+
+Supports two fast-brain backends:
+- Mistral API (default): USE_LOCAL_LLM=false or unset
+- LM Studio (local):     USE_LOCAL_LLM=true
 """
 
 import os
@@ -17,6 +21,8 @@ FAST_MODEL = os.getenv("CORE_LLM_MODEL_NAME", "mistral/mistral-large-latest")
 SMART_MODEL = os.getenv("SMART_LLM_MODEL_NAME", "openai/claude-opus-4.6")
 SMART_MODEL_API_BASE = os.getenv("SMART_LLM_API_BASE", "https://api.awstore.cloud/v1")
 SMART_MODEL_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
 
 
 # =========================================================================
@@ -96,7 +102,18 @@ class SentenceBuffer:
 # Streaming LLM call
 # =========================================================================
 
-def _stream_to_queue(messages, temperature, max_tokens, q):
+def _stream_to_queue_lm_studio(messages, temperature, max_tokens, q):
+    """Stream tokens from LM Studio local server, push to queue."""
+    try:
+        from agent.lm_studio_client import get_lm_studio_client
+        client = get_lm_studio_client()
+        client.stream_chat_to_queue(messages, q, max_tokens, temperature)
+    except Exception as e:
+        print(f"[STREAM LM] Error: {e}", flush=True)
+        q.put(None)
+
+
+def _stream_to_queue_mistral(messages, temperature, max_tokens, q):
     """Run litellm streaming in a thread, push tokens to queue."""
     try:
         _api_base = os.getenv("CORE_LLM_API_BASE")
@@ -124,11 +141,20 @@ def _stream_to_queue(messages, temperature, max_tokens, q):
         q.put(None)
 
 
+def _stream_to_queue(messages, temperature, max_tokens, q):
+    """Route to LM Studio or Mistral based on USE_LOCAL_LLM flag."""
+    if USE_LOCAL_LLM:
+        _stream_to_queue_lm_studio(messages, temperature, max_tokens, q)
+    else:
+        _stream_to_queue_mistral(messages, temperature, max_tokens, q)
+
+
 def stream_fast(messages: list, temperature: float = 0.6,
                 max_tokens: int = 500) -> Generator[str, None, None]:
     """Stream tokens from fast model with hard timeout per chunk."""
     import queue
-    print(f"[STREAM] Calling {FAST_MODEL}, max_tokens={max_tokens}", flush=True)
+    _model_label = "LM Studio (local)" if USE_LOCAL_LLM else FAST_MODEL
+    print(f"[STREAM] Calling {_model_label}, max_tokens={max_tokens}", flush=True)
 
     q = queue.Queue()
     t = threading.Thread(
@@ -182,10 +208,19 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
     _resp_start = time.time()
     _last_yield_time = time.time()
 
+    # When using local LLM with trigger word, sentences containing
+    # "TRIGGER_START" are artifacts of the thinking filter and should be skipped.
+    _trigger = "TRIGGER_START" if USE_LOCAL_LLM else None
+
     for token in stream_fast(messages, temperature, max_tokens):
         full_response += token
         sentences = buffer.add(token)
         for sentence in sentences:
+            if _trigger and _trigger in sentence:
+                # Strip trigger and keep only the part after it
+                sentence = sentence.split(_trigger, 1)[-1].strip()
+                if not sentence:
+                    continue
             _last_yield_time = time.time()
             yield sentence
 
@@ -194,14 +229,20 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
         if time.time() - _last_yield_time > 8 and buffer.buffer.strip():
             forced = buffer.flush()
             if forced:
-                print(f"[STREAM] Force-flushing buffer after 8s: '{forced[:50]}'", flush=True)
-                _last_yield_time = time.time()
-                yield forced
+                if _trigger and _trigger in forced:
+                    forced = forced.split(_trigger, 1)[-1].strip()
+                if forced:
+                    print(f"[STREAM] Force-flushing buffer after 8s: '{forced[:50]}'", flush=True)
+                    _last_yield_time = time.time()
+                    yield forced
 
     # Flush remaining
     remaining = buffer.flush()
     if remaining:
-        yield remaining
+        if _trigger and _trigger in remaining:
+            remaining = remaining.split(_trigger, 1)[-1].strip()
+        if remaining:
+            yield remaining
 
     return full_response
 

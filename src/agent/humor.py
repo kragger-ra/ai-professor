@@ -12,8 +12,8 @@ from typing import Optional
 HUMOR_MODEL = os.getenv("CORE_LLM_MODEL_NAME", "mistral/mistral-large-latest")
 
 # Parameters
-HUMOR_PROBABILITY = 0.07       # 7% chance per response
-HUMOR_COOLDOWN = 8             # minimum 8 responses between jokes
+HUMOR_PROBABILITY = 0.90       # 90% MAXIMUM CLOWN MODE
+HUMOR_COOLDOWN = 0             # no cooldown — every response is a chance
 HUMOR_MAX_WORDS = 25           # max words in a joke
 HUMOR_TEMPERATURE = 0.9        # high for variety
 

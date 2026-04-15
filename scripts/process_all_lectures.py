@@ -222,12 +222,12 @@ def summarize_lecture(transcript: str, week: str, lecture_date: str) -> str:
     )
 
     # If combined is too large for one call, do hierarchical merge
-    if len(combined.split()) > 8000:
-        # Merge in groups of 5
+    if len(combined.split()) > 3000 or len(partials) > 4:
+        # Merge in groups of 3 (AWstore times out on large prompts)
         print(f"  Hierarchical merge ({len(partials)} partials)...")
         mid_summaries = []
-        for g in range(0, len(partials), 5):
-            group = partials[g:g+5]
+        for g in range(0, len(partials), 3):
+            group = partials[g:g+3]
             group_text = "\n\n---\n\n".join(
                 f"### Часть {g+j+1}\n{s}" for j, s in enumerate(group)
             )

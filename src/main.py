@@ -798,10 +798,15 @@ def main():
     _log_timing("LectureManager initialized")
 
     # Initialize VoiceMeeter routing before TTS starts
+    # Use zoom_mode() for Zoom calls, direct_mode() for local testing
     try:
-        from utils.voicemeeter_control import direct_mode
-        _vm_status = direct_mode()
-        _log_timing(f"VoiceMeeter initialized: {_vm_status}")
+        from utils.voicemeeter_control import zoom_mode, direct_mode
+        _vm_mode = os.getenv("AUDIO_MODE", "direct").lower()
+        if _vm_mode == "zoom":
+            _vm_status = zoom_mode()
+        else:
+            _vm_status = direct_mode()
+        _log_timing(f"VoiceMeeter initialized ({_vm_mode}): {_vm_status}")
     except Exception as e:
         _log_timing(f"VoiceMeeter init failed (non-critical): {e}")
 
@@ -830,7 +835,12 @@ def main():
         print("[main.py] Speech to Text feature is enabled.")
         _log_timing("Starting STTProc process")
         from data_collectors.stt.mic_stt_handler import mic_stt_handler
-        stt_device_name = os.getenv("SOUND_DEVICE_IN", "")
+        # In zoom mode, STT listens to Voicemeeter Out B2 (Zoom audio)
+        if os.getenv("AUDIO_MODE", "direct").lower() == "zoom":
+            stt_device_name = "Voicemeeter Out B2"
+            print(f"[main.py] ZOOM mode: STT listening to {stt_device_name}")
+        else:
+            stt_device_name = os.getenv("SOUND_DEVICE_IN", "")
         STTProc = Process(
             target=mic_stt_handler,
             kwargs={"ctx_swarm": ctx_swarm, "audio_device_name": stt_device_name},

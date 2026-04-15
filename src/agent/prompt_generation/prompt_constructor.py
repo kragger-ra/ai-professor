@@ -3,6 +3,7 @@
 Creates the system prompt and message chain for the LLM.
 """
 
+import os
 import time
 from threading import Thread
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -36,12 +37,20 @@ PROFESSOR_VOICE_RULES = (
     "Тег эмоции в конце — не произносить вслух."
 )
 
+_USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
+_TRIGGER_INSTRUCTION = (
+    "\n\nОБЯЗАТЕЛЬНО: Начинай КАЖДЫЙ ответ со слова TRIGGER_START — без исключений.\n"
+    "Всё до TRIGGER_START не будет показано студенту.\n"
+    "Пример: TRIGGER_START Нейронная сеть — это вычислительная модель. (thoughtful)"
+    if _USE_LOCAL_LLM else ""
+)
+
 PROFESSOR_GOAL = f"""Ты — {SELF_NAME}. МУЖЧИНА. Мужской род (сказал, объяснил, готов).
 {PROFESSOR_VOICE_RULES}
 Русский язык. Тег настроения в конце реплики: (neutral) (happy) (thoughtful) (encouraging).
 Не повторяй слова студента. Не пересказывай вопрос. Сразу отвечай по сути.
 ЗАПРЕЩЕНО начинать ответ с "Добрый день", "Привет", "Здравствуйте" — если в чате уже было приветствие. Сразу к делу.
-
+{_TRIGGER_INSTRUCTION}
 ИСТОЧНИКИ ЗНАНИЙ:
 - Материалы курса (RAG) — основной источник. Если информация найдена — используй.
 - Собственные знания — если в материалах курса нет. Предупреди: "Этого нет в наших материалах, но из общих знаний..."
