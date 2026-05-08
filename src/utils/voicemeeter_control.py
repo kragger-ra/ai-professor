@@ -22,13 +22,16 @@ import traceback
 _vm = None
 _engine_was_shutdown = False  # set by release_audio(); next mode switch must restart
 
-# Virtual audio devices required for routing. CABLE-B is needed only in
-# meeting mode (Strip 0 -> B2 -> STT). VAIO carries the TTS signal.
+# Virtual audio devices required for routing. All four are part of the
+# stock VB-Cable + VoiceMeeter Banana install — no extra A+B pack needed.
+#   CABLE Input/Output — call-app pipes its audio in/out via VB-Cable
+#   Voicemeeter Input  — TTS writes here (Banana main VAIO, Strip 3 source)
+#   Voicemeeter Out B2 — STT reads here (Banana virtual bus B2)
 _REQUIRED_DEVICES = (
     "CABLE Input",
     "CABLE Output",
-    "CABLE-B Input",
-    "VoiceMeeter VAIO",
+    "Voicemeeter Input",
+    "Voicemeeter Out B2",
 )
 
 
