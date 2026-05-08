@@ -1,15 +1,19 @@
 """VoiceMeeter Banana audio routing for AI Professor.
 
 Three modes:
-  ZOOM:    TTS -> VoiceMeeter VAIO -> A1 (headphones) + B1 (Zoom mic)
-           Zoom speaker -> VB-Cable -> Strip 0 -> A1 (monitor) + B2 (STT)
+  MEETING: TTS -> VoiceMeeter VAIO -> A1 (headphones) + B1 (call mic)
+           Call speaker -> VB-Cable -> Strip 0 -> A1 (monitor) + B2 (STT)
 
-  DIRECT:  TTS -> VoiceMeeter VAIO -> A1 (headphones only)
+  LOCAL:   TTS -> VoiceMeeter VAIO -> A1 (headphones only)
            Strip 0 B2 off (STT uses fifine mic directly)
 
   RELEASE: Mute all, shutdown engine, return devices to Windows.
 
-IMPORTANT: zoom_mode() and direct_mode() always unmute the relevant
+Works with any audio call app where CABLE Input is selected as the mic
+and CABLE Output as the speaker (Discord, Meet, Teams, Telegram, ...).
+Zoom is excluded — its driver bypasses VB-Cable routing.
+
+IMPORTANT: meeting_mode() and local_mode() always unmute the relevant
 strips and buses, so they work correctly even after a release_audio().
 """
 
@@ -48,10 +52,10 @@ def _ensure_engine_running(vm):
 def _unmute_core(vm):
     """Unmute the strips and buses used by AI Professor.
 
-    Strip 0: VB-Cable (Zoom audio input)
+    Strip 0: VB-Cable (call audio input)
     Strip 3: VAIO (TTS output)
     Bus A1 (index 0): headphones / monitor
-    Bus B1 (index 3): Zoom mic output
+    Bus B1 (index 3): call mic output
     Bus B2 (index 4): STT device output
     """
     # Unmute active strips
@@ -59,12 +63,12 @@ def _unmute_core(vm):
     vm.strip[3].mute = False
     # Unmute output buses
     vm.bus[0].mute = False   # A1 — headphones
-    vm.bus[3].mute = False   # B1 — Zoom mic
+    vm.bus[3].mute = False   # B1 — call mic
     vm.bus[4].mute = False   # B2 — STT
 
 
-def zoom_mode() -> str:
-    """Enable Zoom routing: TTS->Zoom, Zoom->STT."""
+def meeting_mode() -> str:
+    """Enable call-app routing: TTS->call mic, call audio->STT."""
     vm = _get_vm()
     if vm is None:
         return "VoiceMeeter not available"
@@ -73,25 +77,25 @@ def zoom_mode() -> str:
         _ensure_engine_running(vm)
         _unmute_core(vm)
 
-        # Strip 0 (VB-Cable / Zoom audio): route to A1 (monitor) + B2 (STT)
+        # Strip 0 (VB-Cable / call audio): route to A1 (monitor) + B2 (STT)
         vm.strip[0].A1 = True
         vm.strip[0].B1 = False
         vm.strip[0].B2 = True
 
-        # Strip 3 (VAIO / TTS output): route to A1 (headphones) + B1 (Zoom mic)
+        # Strip 3 (VAIO / TTS output): route to A1 (headphones) + B1 (call mic)
         vm.strip[3].A1 = True
         vm.strip[3].B1 = True
         vm.strip[3].B2 = False
 
-        print("[VoiceMeeter] ZOOM mode: TTS->Zoom ON, Zoom->STT ON")
-        return "ZOOM mode ON"
+        print("[VoiceMeeter] MEETING mode: TTS->call mic ON, call->STT ON")
+        return "MEETING mode ON"
     except Exception as e:
         traceback.print_exc()
         return f"Error: {e}"
 
 
-def direct_mode() -> str:
-    """Disable Zoom routing: TTS to headphones only, no Zoom feedback."""
+def local_mode() -> str:
+    """Disable call routing: TTS to headphones only, no call feedback."""
     vm = _get_vm()
     if vm is None:
         return "VoiceMeeter not available"
@@ -100,18 +104,18 @@ def direct_mode() -> str:
         _ensure_engine_running(vm)
         _unmute_core(vm)
 
-        # Strip 0 (VB-Cable): A1 only, no B2 (STT won't get Zoom audio)
+        # Strip 0 (VB-Cable): A1 only, no B2 (STT won't get call audio)
         vm.strip[0].A1 = True
         vm.strip[0].B1 = False
         vm.strip[0].B2 = False
 
-        # Strip 3 (VAIO / TTS output): A1 only, no B1 (Zoom won't get TTS)
+        # Strip 3 (VAIO / TTS output): A1 only, no B1 (call won't get TTS)
         vm.strip[3].A1 = True
         vm.strip[3].B1 = False
         vm.strip[3].B2 = False
 
-        print("[VoiceMeeter] DIRECT mode: TTS->headphones only, Zoom disconnected")
-        return "DIRECT mode ON"
+        print("[VoiceMeeter] LOCAL mode: TTS->headphones only, call disconnected")
+        return "LOCAL mode ON"
     except Exception as e:
         traceback.print_exc()
         return f"Error: {e}"
@@ -123,14 +127,14 @@ def get_status() -> str:
     if vm is None:
         return "VoiceMeeter N/A"
     try:
-        zoom_stt = vm.strip[0].B2   # Zoom audio -> STT
-        zoom_tts = vm.strip[3].B1   # TTS -> Zoom mic
-        if zoom_stt and zoom_tts:
-            return "ZOOM"
-        elif not zoom_stt and not zoom_tts:
-            return "DIRECT"
+        call_stt = vm.strip[0].B2   # call audio -> STT
+        call_tts = vm.strip[3].B1   # TTS -> call mic
+        if call_stt and call_tts:
+            return "MEETING"
+        elif not call_stt and not call_tts:
+            return "LOCAL"
         else:
-            return f"CUSTOM (B2={zoom_stt}, B1={zoom_tts})"
+            return f"CUSTOM (B2={call_stt}, B1={call_tts})"
     except Exception:
         return "ERROR"
 

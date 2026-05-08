@@ -26,7 +26,7 @@ timeout /t 15 /nobreak >nul
 
 echo.
 echo Configuring audio routing...
-python -c "import sys; sys.path.insert(0,chr(39)+chr(115)+chr(114)+chr(99)+chr(39)); from utils.voicemeeter_control import zoom_mode; print(zoom_mode())"
+python -c "import sys; sys.path.insert(0,chr(39)+chr(115)+chr(114)+chr(99)+chr(39)); from utils.voicemeeter_control import meeting_mode; print(meeting_mode())"
 
 echo.
 echo ========================================

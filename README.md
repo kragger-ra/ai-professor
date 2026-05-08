@@ -47,7 +47,7 @@ TTS Process (Vosk)
 - **Student Profiles** — SQLite, обновляются meta-agent (Claude Haiku) в фоне
 - **Конспектирование лекций** — STT → JSONL → periodic summarization → RAG
 - **Метрики** — SQLite логирование взаимодействий, latency, weekly stats
-- **Audio routing** — VoiceMeeter Banana для Zoom и прямого режима
+- **Audio routing** — VoiceMeeter Banana: режим созвона (любое приложение через VB-Cable) и локальный режим
 
 ## Структура проекта
 

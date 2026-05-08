@@ -1400,7 +1400,7 @@ LM_STUDIO_FILTER_THINKING="true"
 FASTER_WHISPER_MODEL_NAME="large-v3"
 STT_COMPUTE_DEVICE="cuda"
 STT_COMPUTE_TYPE="float16"
-AUDIO_MODE="direct"                   # "direct" или "zoom"
+AUDIO_MODE="local"                    # "local" или "meeting"
 SOUND_DEVICE_IN="fifine"
 ```
 

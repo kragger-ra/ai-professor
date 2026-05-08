@@ -319,16 +319,16 @@ with demo:
         gr.Markdown("### Audio Routing (VoiceMeeter)")
         audio_status = gr.Textbox(value="—", label="Current mode", interactive=False)
         with gr.Row():
-            zoom_btn = gr.Button("Zoom Mode", variant="primary")
-            direct_btn = gr.Button("Direct Mode", variant="secondary")
-            release_btn = gr.Button("Release Audio", variant="stop")
+            meeting_btn = gr.Button("Созвон", variant="primary")
+            local_btn = gr.Button("Локально", variant="secondary")
+            release_btn = gr.Button("Отпустить", variant="stop")
 
         from utils.voicemeeter_control import (
-            zoom_mode, direct_mode, release_audio, get_status as vm_status,
+            meeting_mode, local_mode, release_audio, get_status as vm_status,
         )
 
-        zoom_btn.click(fn=zoom_mode, outputs=[audio_status])
-        direct_btn.click(fn=direct_mode, outputs=[audio_status])
+        meeting_btn.click(fn=meeting_mode, outputs=[audio_status])
+        local_btn.click(fn=local_mode, outputs=[audio_status])
         release_btn.click(fn=release_audio, outputs=[audio_status])
         demo.load(fn=vm_status, outputs=[audio_status])
 
@@ -736,14 +736,14 @@ def main():
     _log_timing("LectureManager initialized")
 
     # Initialize VoiceMeeter routing before TTS starts
-    # Use zoom_mode() for Zoom calls, direct_mode() for local testing
+    # AUDIO_MODE=meeting for any call app (Discord/Meet/Teams/Telegram), local for testing
     try:
-        from utils.voicemeeter_control import zoom_mode, direct_mode
-        _vm_mode = os.getenv("AUDIO_MODE", "direct").lower()
-        if _vm_mode == "zoom":
-            _vm_status = zoom_mode()
+        from utils.voicemeeter_control import meeting_mode, local_mode
+        _vm_mode = os.getenv("AUDIO_MODE", "local").lower()
+        if _vm_mode == "meeting":
+            _vm_status = meeting_mode()
         else:
-            _vm_status = direct_mode()
+            _vm_status = local_mode()
         _log_timing(f"VoiceMeeter initialized ({_vm_mode}): {_vm_status}")
     except Exception as e:
         _log_timing(f"VoiceMeeter init failed (non-critical): {e}")
@@ -773,10 +773,10 @@ def main():
         print("[main.py] Speech to Text feature is enabled.")
         _log_timing("Starting STTProc process")
         from data_collectors.stt.mic_stt_handler import mic_stt_handler
-        # In zoom mode, STT listens to Voicemeeter Out B2 (Zoom audio)
-        if os.getenv("AUDIO_MODE", "direct").lower() == "zoom":
+        # In meeting mode, STT listens to Voicemeeter Out B2 (call audio)
+        if os.getenv("AUDIO_MODE", "local").lower() == "meeting":
             stt_device_name = "Voicemeeter Out B2"
-            print(f"[main.py] ZOOM mode: STT listening to {stt_device_name}")
+            print(f"[main.py] MEETING mode: STT listening to {stt_device_name}")
         else:
             stt_device_name = os.getenv("SOUND_DEVICE_IN", "")
         STTProc = Process(
