@@ -21,6 +21,15 @@ import traceback
 
 _vm = None
 
+# Virtual audio devices required for routing. CABLE-B is needed only in
+# meeting mode (Strip 0 -> B2 -> STT). VAIO carries the TTS signal.
+_REQUIRED_DEVICES = (
+    "CABLE Input",
+    "CABLE Output",
+    "CABLE-B Input",
+    "VoiceMeeter VAIO",
+)
+
 
 def _get_vm():
     global _vm
@@ -33,6 +42,32 @@ def _get_vm():
             print(f"[VoiceMeeter] Failed to connect: {e}")
             return None
     return _vm
+
+
+def _check_vm_banana() -> bool:
+    """Return True if VoiceMeeter Banana is reachable (engine running)."""
+    vm = _get_vm()
+    if vm is None:
+        return False
+    try:
+        _ = vm.strip[0].mute  # cheap read; raises if engine is shut down
+        return True
+    except Exception:
+        return False
+
+
+def _validate_devices() -> list:
+    """Return required audio devices that are missing from the OS device list."""
+    try:
+        import sounddevice as sd
+        names = [dev["name"] for dev in sd.query_devices()]
+    except Exception:
+        return list(_REQUIRED_DEVICES)
+    missing = []
+    for required in _REQUIRED_DEVICES:
+        if not any(required.lower() in name.lower() for name in names):
+            missing.append(required)
+    return missing
 
 
 def _ensure_engine_running(vm):
@@ -122,10 +157,15 @@ def local_mode() -> str:
 
 
 def get_status() -> str:
-    """Return current routing mode based on strip state."""
+    """Return current routing mode, or a diagnostic message if setup is incomplete."""
+    if not _check_vm_banana():
+        return "VM не запущен"
+
+    missing = _validate_devices()
+    if missing:
+        return f"VB-Cable отсутствует: {', '.join(missing)}"
+
     vm = _get_vm()
-    if vm is None:
-        return "VoiceMeeter N/A"
     try:
         call_stt = vm.strip[0].B2   # call audio -> STT
         call_tts = vm.strip[3].B1   # TTS -> call mic
@@ -136,7 +176,7 @@ def get_status() -> str:
         else:
             return f"CUSTOM (B2={call_stt}, B1={call_tts})"
     except Exception:
-        return "ERROR"
+        return "VM не запущен"
 
 
 def release_audio() -> str:
