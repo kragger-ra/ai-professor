@@ -20,6 +20,7 @@ strips and buses, so they work correctly even after a release_audio().
 import traceback
 
 _vm = None
+_engine_was_shutdown = False  # set by release_audio(); next mode switch must restart
 
 # Virtual audio devices required for routing. CABLE-B is needed only in
 # meeting mode (Strip 0 -> B2 -> STT). VAIO carries the TTS signal.
@@ -71,17 +72,28 @@ def _validate_devices() -> list:
 
 
 def _ensure_engine_running(vm):
-    """Restart VoiceMeeter audio engine if it was shut down.
+    """Restart VoiceMeeter audio engine only if it was shut down.
 
-    After release_audio() calls vm.command.shutdown(), the process stays
-    alive but the engine is dead. We must restart it before changing routing.
+    Previously this restarted unconditionally with a 5s sleep on every mode
+    switch. Now we restart only when needed:
+      - _engine_was_shutdown flag set by release_audio() — fast path
+      - fallback cheap-read probe (vm.strip[0].mute) catches external shutdown
     """
+    global _engine_was_shutdown
+    if not _engine_was_shutdown:
+        try:
+            _ = vm.strip[0].mute
+            return  # engine alive, no restart needed
+        except Exception:
+            pass  # fall through to restart
+
     import time
     try:
         vm.command.restart()
         time.sleep(5)  # engine needs ~5s to reinitialize audio devices
     except Exception:
-        pass  # restart may fail if engine is already running — that's fine
+        pass
+    _engine_was_shutdown = False
 
 
 def _unmute_core(vm):
@@ -202,6 +214,8 @@ def release_audio() -> str:
 
         # Shutdown VoiceMeeter engine to release exclusive device locks
         vm.command.shutdown()
+        global _engine_was_shutdown
+        _engine_was_shutdown = True
 
         print("[VoiceMeeter] RELEASED: all strips/buses muted, engine shutdown")
         cleanup()
