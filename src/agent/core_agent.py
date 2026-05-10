@@ -44,6 +44,7 @@ from lecture.lecture_delivery import (
     generate_quiz_questions,
     DELIVERY_SYSTEM_PROMPT,
 )
+from lecture.quiz_loop import QuizSession
 from agent.humor import try_humor
 from config_schema.general import get_name
 from utils.debug import bcolors
@@ -269,6 +270,8 @@ class CoreAgent(BaseAgent):
         # Q&A quiz phase state
         self._quiz_questions: list[str] = []
         self._quiz_idx = 0
+        # Tutor: structured quiz session (grades + weak block tracking)
+        self._quiz_session = None  # type: QuizSession | None
 
         if ctx_host is None:
             self.ctx_host = CtxHost(ctx_handler)
@@ -630,6 +633,7 @@ class CoreAgent(BaseAgent):
         self._lecture_paused = False
         self._quiz_questions = []
         self._quiz_idx = 0
+        self._quiz_session = None
         _agent_log("[LECTURE] Stopped")
 
     def _check_for_new_student_msg(self) -> str:
@@ -901,28 +905,28 @@ class CoreAgent(BaseAgent):
         time.sleep(QA_POLL_INTERVAL_S)
 
     def _enter_qa_quiz(self):
-        """Transition qa_audience → qa_quiz. Generate and ask check questions."""
-        _agent_log("[LECTURE] → qa_quiz")
+        """Transition qa_audience → qa_quiz. Build QuizSession and ask the first question."""
+        _agent_log("[LECTURE] → qa_quiz (Tutor)")
         delivered = (self._lecture_delivery.blocks_delivered
                      if self._lecture_delivery else [])
         topic = self._lecture_delivery.topic if self._lecture_delivery else ""
         self._send_to_tts("А теперь несколько проверочных вопросов.")
         try:
-            self._quiz_questions = generate_quiz_questions(
-                delivered, n=QUIZ_QUESTIONS_COUNT, topic=topic,
-            )
+            session = QuizSession(delivered, topic=topic)
+            session.generate_questions(n=QUIZ_QUESTIONS_COUNT)
         except Exception as e:
             _agent_log(f"[LECTURE] Quiz generation failed: {e}")
             traceback.print_exc()
-            self._quiz_questions = []
+            session = QuizSession(delivered, topic=topic)
+            session.questions = []
+        self._quiz_session = session
         self._quiz_idx = 0
         self._lecture_phase = "qa_quiz"
-        if not self._quiz_questions:
+        if not session.questions:
             _agent_log("[LECTURE] No quiz questions generated, skipping to farewell")
             self._enter_farewell()
             return
-        # Ask the first question and wait for answer
-        self._ask_quiz_question(self._quiz_questions[0])
+        self._ask_quiz_question(session.questions[0]["q"])
 
     def _ask_quiz_question(self, question: str):
         """Speak a quiz question and arm the wait-for-reply state."""
@@ -933,40 +937,183 @@ class CoreAgent(BaseAgent):
         self._silence_hint_sent = False
         self._last_response_time = time.time()
 
+    _GRADE_ACK = {
+        2: "Верно, отлично.",
+        1: "Частично — основное ты уловил, но кое-что упустил.",
+        0: "Не совсем. Давай разберём это место ещё раз.",
+    }
+
     def _qa_quiz_step(self):
-        """Process student answers to quiz questions one by one."""
+        """Process student answers, grade via QuizSession, route to remediation if needed."""
         msg = self._check_for_new_student_msg()
         if not msg:
             time.sleep(QA_POLL_INTERVAL_S)
             return
 
         msg_lower = msg.strip().lower().rstrip(".!?,")
-        # End-lecture command
         if any(p in msg_lower for p in self._END_LECTURE_PHRASES):
             _agent_log("[LECTURE] End-lecture command in qa_quiz")
             self._waiting_for_reply = False
             self._enter_farewell()
             return
-        # Skip backchannel — wait for real answer
         if msg_lower in BACKCHANNEL_PATTERNS:
             return
 
-        # This is the answer to current quiz question
-        # (student msg is already in ctx_chat via STT — no need to save again)
         self._waiting_for_reply = False
+        session = self._quiz_session
+        if session is None or self._quiz_idx >= len(session.questions):
+            _agent_log("[LECTURE] qa_quiz_step: no session or out-of-range, going to farewell")
+            self._enter_farewell()
+            return
+
         _agent_log(f"[LECTURE] Quiz answer #{self._quiz_idx + 1}: '{msg[:80]}'")
-        # Short acknowledgement (Lecture mode: no grading; Tutor will override)
-        ack = "Хорошо, спасибо."
+        try:
+            record = session.grade_answer(self._quiz_idx, msg)
+            ack = self._GRADE_ACK.get(record["grade"], "Хорошо.")
+            _agent_log(f"[LECTURE] Grade={record['grade']}, weak={record['weak_concepts']}")
+        except Exception as e:
+            _agent_log(f"[LECTURE] Grading failed: {e}")
+            traceback.print_exc()
+            ack = "Хорошо, спасибо."
         self._send_to_tts(ack)
         self._save_to_history(ack)
 
         self._quiz_idx += 1
-        if self._quiz_idx >= len(self._quiz_questions):
-            # All questions answered → farewell
+        if self._quiz_idx < len(session.questions):
+            self._ask_quiz_question(session.questions[self._quiz_idx]["q"])
+            return
+
+        # All initial questions answered — decide on remediation
+        self._maybe_start_remediation()
+
+    def _maybe_start_remediation(self):
+        """If there are weak blocks and budget left → enter remediation; else farewell."""
+        session = self._quiz_session
+        if session is None or session.is_done():
             self._enter_farewell()
             return
-        # Ask next question
-        self._ask_quiz_question(self._quiz_questions[self._quiz_idx])
+        weak_id = session.pick_weakest_block()
+        if weak_id is None:
+            self._enter_farewell()
+            return
+        self._enter_remediation(weak_id)
+
+    def _enter_remediation(self, block_id):
+        """Re-explain a weak block with focus on missed concepts, then ask a retest question."""
+        session = self._quiz_session
+        if session is None:
+            self._enter_farewell()
+            return
+        block = session.find_block(block_id)
+        if block is None:
+            _agent_log(f"[LECTURE] Remediation: block id={block_id} not found, skipping")
+            session.mark_block_resolved(block_id)
+            session.bump_iteration()
+            self._maybe_start_remediation()
+            return
+
+        weak = session.latest_weak_concepts(block_id) or block.get("key_points", [])[:2]
+        focus = "; ".join(weak)
+        _agent_log(f"[LECTURE] → remediation block={block_id}, focus='{focus[:80]}'")
+        self._lecture_phase = "remediation"
+        self._send_to_tts("Давай вернёмся к этому моменту и разберём ещё раз.")
+        self._deliver_block_with_focus(block, focus)
+
+        # After delivery, ask one retest question on the same block
+        retest = session.generate_retest_question(block_id)
+        if retest is None:
+            _agent_log("[LECTURE] Remediation retest generation failed; advancing")
+            session.mark_block_resolved(block_id)
+            session.bump_iteration()
+            self._maybe_start_remediation()
+            return
+        # The retest is appended to session.questions; point _quiz_idx at it
+        self._quiz_idx = len(session.questions) - 1
+        self._ask_quiz_question(retest["q"])
+
+    def _deliver_block_with_focus(self, block: dict, focus: str):
+        """Stream a single lecture block with extra system steer toward focus concepts."""
+        try:
+            from lecture.lecture_delivery import LectureDelivery as _LD
+            tmp = _LD({"blocks": [block], "topic": self._lecture_delivery.topic if self._lecture_delivery else ""})
+            tmp.blocks_delivered = []
+            delivery_prompt = tmp.build_delivery_prompt(block)
+        except Exception as e:
+            _agent_log(f"[LECTURE] build_delivery_prompt failed in remediation: {e}")
+            delivery_prompt = (f"Тезисы блока: {block.get('key_points', [])}. "
+                               f"Объясни заново, особое внимание уделив: {focus}.")
+
+        system_extra = (f"\nСтудент не понял этот блок. Сфокусируйся на: {focus}. "
+                        f"Объясни иначе и проще, используй пример или аналогию. "
+                        f"3-5 коротких предложений.")
+        messages = [
+            {"role": "system", "content": DELIVERY_SYSTEM_PROMPT + system_extra},
+            {"role": "user", "content": delivery_prompt},
+        ]
+        spoken = []
+        try:
+            for sentence in stream_response_sentences(
+                messages,
+                temperature=LECTURE_TEMPERATURE,
+                max_tokens=LECTURE_BLOCK_MAX_TOKENS,
+            ):
+                spoken.append(sentence)
+                self._send_to_tts(sentence)
+        except Exception as e:
+            _agent_log(f"[LECTURE] remediation streaming failed: {e}")
+            traceback.print_exc()
+        if spoken:
+            self._save_to_history(" ".join(spoken))
+        # Wait for TTS queue to drain before retest question
+        wait_start = time.time()
+        while len(self.ctx_swarm["tts_queue"]) > 0 and time.time() - wait_start < 90:
+            time.sleep(TTS_POLL_INTERVAL_S)
+
+    def _remediation_step(self):
+        """Wait for retest answer, grade it, decide next remediation block or farewell."""
+        msg = self._check_for_new_student_msg()
+        if not msg:
+            time.sleep(QA_POLL_INTERVAL_S)
+            return
+
+        msg_lower = msg.strip().lower().rstrip(".!?,")
+        if any(p in msg_lower for p in self._END_LECTURE_PHRASES):
+            _agent_log("[LECTURE] End-lecture command in remediation")
+            self._waiting_for_reply = False
+            self._enter_farewell()
+            return
+        if msg_lower in BACKCHANNEL_PATTERNS:
+            return
+
+        self._waiting_for_reply = False
+        session = self._quiz_session
+        if session is None or self._quiz_idx >= len(session.questions):
+            self._enter_farewell()
+            return
+        retest_q = session.questions[self._quiz_idx]
+        block_id = retest_q.get("source_block_id")
+
+        _agent_log(f"[LECTURE] Retest answer for block {block_id}: '{msg[:80]}'")
+        try:
+            record = session.grade_answer(self._quiz_idx, msg)
+            grade = record["grade"]
+        except Exception as e:
+            _agent_log(f"[LECTURE] Retest grading failed: {e}")
+            traceback.print_exc()
+            grade = 1
+
+        if grade >= 2:
+            session.mark_block_resolved(block_id)
+            ack = "Отлично, теперь видно, что ты понял."
+        elif grade == 1:
+            ack = "Уже лучше, идём дальше."
+        else:
+            ack = "Пока не до конца, но мы возвращаться к этому больше не будем — потренируйся сам потом."
+        self._send_to_tts(ack)
+        self._save_to_history(ack)
+
+        session.bump_iteration()
+        self._maybe_start_remediation()
 
     def _enter_farewell(self):
         """Speak farewell and stop the lecture cleanly."""
@@ -1102,6 +1249,8 @@ class CoreAgent(BaseAgent):
                         self._qa_audience_step()
                     elif self._lecture_phase == "qa_quiz":
                         self._qa_quiz_step()
+                    elif self._lecture_phase == "remediation":
+                        self._remediation_step()
                     elif self._lecture_phase == "farewell":
                         # farewell is synchronous inside _enter_farewell, this should not normally hit
                         time.sleep(0.2)
