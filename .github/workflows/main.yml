@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [new_main]
+  pull_request:
+    branches: [new_main]
+
+env:
+  UV_SYSTEM_PYTHON: 1
+
+jobs:
+  black-formatter:
+    name: python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.10.9"
+      - uses: yezz123/setup-uv@v4
+        with:
+          uv-venv: "your_venv_name"
+
+      - name: Install dependencies
+        run: uv pip install black isort flake8
+
+      - name: Check formatting
+        run: |
+          uv run black --check src
+          uv run isort --profile=black --check-only src
+
+      - name: Lint with flake8
+        continue-on-error: true
+        run: |
+          uv run flake8 --exit-zero src
+#  flake8-ideal-check:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v2
+#
+#      - name: Set up Python
+#        uses: actions/setup-python@v2
+#        with:
+#          python-version: 3.10.9
+#
+#      - name: Install dependencies
+#        run: |
+#          python -m pip install --upgrade pip
+#          pip install flake8
+#      - uses: actions/checkout@v2
+#      - name: Lint with flake8
+#        run: |
+#          flake8 config llm models tts utils vllm_docker config data_collectors

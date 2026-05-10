@@ -1,0 +1,54 @@
+[project]
+name = "nettyan"
+version = "2.0.5"
+description = "NetTyan Prototype"
+readme = "README.md"
+requires-python = ">=3.10.0,<3.11.0"
+dependencies = [
+    "cyrtranslit~=1.1.1",
+    "faiss-cpu~=1.12.0",
+    "flask~=3.1.2",
+    "gradio~=5.49.1",
+    "langchain-community~=0.3.31",
+    "langchain-litellm~=0.3.0",
+    "langchain-openai~=0.3.35",
+    "langchain-text-splitters~=0.3.11",
+    "librosa~=0.11.0",
+    "onnxruntime~=1.23.1",
+    "mistralai~=1.9.11",
+    "mss~=10.1.0",
+    "dotenv~=0.9.9",
+    "pip~=25.2",
+    "pygame~=2.6.1",
+    "python-dotenv~=1.1.1",
+    "python-socketio~=5.14.2",
+    "setuptools==80.0.0",
+    "soundcard~=0.4.5",
+    "typing-extensions~=4.15.0",
+    "websocket-client~=1.9.0",
+    "websockets~=15.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "black~=25.9.0",
+    "isort~=7.0.0",
+    "mkdocs",
+]
+simpletts = [
+    "edge-tts~=6.1.9",
+    "vosk-tts~=0.3.61",
+    "scipy~=1.15.3",
+]
+stt = [
+    "faster-whisper~=1.2.0",
+]
+gpu = [
+    "onnxruntime-gpu~=1.23.2"
+]
+[project.scripts]
+nettyan = "main:main"
+
+[tool.uv]
+package = true
+default-groups = ["dev", "stt"]

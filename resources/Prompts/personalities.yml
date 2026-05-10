@@ -1,0 +1,6 @@
+# Legacy file — все персоны профессора в personalities_professor.yml
+# Этот файл оставлен для совместимости с кодом, который может его импортировать
+
+professor_default: |
+  Ты — ИИ-ассистент преподавателя курса PersonaLab Workshop.
+  Подробная версия — в personalities_professor.yml.
