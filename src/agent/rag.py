@@ -121,6 +121,7 @@ class RagModel:
     def __init__(self):
         start_time = time.time()
         self.index_name = "knowledge"
+        self._active_subject = None  # set by reload_from_path
         self.vec_store_full_path = os.path.join(
             RAG_STORE_DIR, self.index_name + ".faiss"
         )
@@ -275,6 +276,72 @@ class RagModel:
             print("[RAG] RAG RAG !!!RAG ERROR!!!!", e)
         return NOT_FOUND_MSG
 
+
+    def reload_from_path(self, name: str, src_dir: str, mode: str = "replace") -> int:
+        """Load .md/.txt from src_dir, tag with subject=name, replace or append the index.
+
+        mode='replace': drop the existing FAISS index and rebuild from new docs only.
+        mode='append':  add new docs to the existing index (and self.docs).
+        Returns number of new chunks loaded.
+        """
+        src_dir = os.path.abspath(src_dir)
+        if not os.path.isdir(src_dir):
+            raise FileNotFoundError(f"RAG source directory not found: {src_dir}")
+
+        new_docs = []
+        for file_glob in ("*.txt", "*.md"):
+            loader = DirectoryLoader(
+                src_dir,
+                glob=file_glob,
+                loader_cls=TextLoader,
+                loader_kwargs={"encoding": "utf-8"},
+                recursive=True,
+            )
+            tmp = loader.load_and_split(text_splitter=self.text_splitter)
+            for doc in tmp:
+                doc.metadata = {"kind": self.index_name, "subject": name, **doc.metadata}
+            new_docs.extend(tmp)
+
+        if not new_docs:
+            raise ValueError(f"No .md or .txt files found in {src_dir}")
+
+        if mode == "replace":
+            self.docs = list(new_docs)
+            # Drop on-disk index so create_vec_store rebuilds cleanly
+            try:
+                if os.path.isdir(RAG_STORE_DIR):
+                    import shutil
+                    shutil.rmtree(RAG_STORE_DIR)
+            except Exception as e:
+                print(f"[RagModel] Could not remove old index: {e}")
+            self.create_vec_store()
+        elif mode == "append":
+            self.docs.extend(new_docs)
+            if self.vec_store is None:
+                self.create_vec_store()
+            else:
+                self.vec_store.add_documents(new_docs)
+                try:
+                    os.makedirs(RAG_STORE_DIR, exist_ok=True)
+                    self.vec_store.save_local(RAG_STORE_DIR, index_name=self.index_name)
+                except Exception as e:
+                    print(f"[RagModel] save_local after append failed: {e}")
+        else:
+            raise ValueError(f"Unknown mode: {mode!r} (expected 'replace' or 'append')")
+
+        # Refresh derived state
+        self.wordkeys = self.get_docs_wordkeys(self.docs)
+        if hasattr(self, "_vocabulary_cache"):
+            del self._vocabulary_cache
+        # Rebuild retriever so it picks up the new vec_store reference
+        if self.vec_store is not None:
+            self.retrivers[self.index_name] = self.vec_store.as_retriever(
+                search_kwargs={"filter": {"kind": self.index_name}, "k": 3}
+            )
+        self._active_subject = name
+        print(f"[RagModel] reload_from_path: subject='{name}', mode='{mode}', "
+              f"new_chunks={len(new_docs)}, total={len(self.docs)}")
+        return len(new_docs)
 
     def get_vocabulary(self) -> set:
         """Extract technical terms from RAG documents for STT correction."""

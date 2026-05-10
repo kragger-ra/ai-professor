@@ -982,6 +982,79 @@ class CoreAgent(BaseAgent):
             time.sleep(TTS_POLL_INTERVAL_S)
         self.stop_lecture()
 
+    # --- Tutor-only voice commands -----------------------------------------
+    _LOAD_SUBJECT_RE = re.compile(
+        r"(?P<verb>загрузи|подгрузи|добавь)\s+"
+        r"(?:предмет|курс|тему|дисциплину)\s+"
+        r"(?P<name>.+?)\s+"
+        r"из\s+(?:папки\s+)?(?P<path>.+?)\s*$",
+        re.IGNORECASE,
+    )
+
+    _TOPIC_LECTURE_RE = re.compile(
+        r"(?:расскажи(?:\s+мне)?(?:\s+(?:про|о|об))?|объясни(?:\s+мне)?(?:\s+(?:про|о|об))?|"
+        r"хочу\s+изучить|изучим|давай\s+(?:изучим|разберём))\s+(?P<topic>.+?)\s*$",
+        re.IGNORECASE,
+    )
+
+    def _handle_tutor_load_subject(self, msg: str) -> bool:
+        """Detect 'загрузи предмет X из папки Y' and reload RAG. Returns True if handled."""
+        if self._lecture_phase != "idle" or not msg:
+            return False
+        m = self._LOAD_SUBJECT_RE.search(msg.strip())
+        if not m:
+            return False
+        name = m.group("name").strip().rstrip(".!?,")
+        path = m.group("path").strip().rstrip(".!?,")
+        verb = m.group("verb").lower()
+        mode = "append" if verb == "добавь" else "replace"
+        _agent_log(f"[TUTOR] Load subject: name='{name}', path='{path}', mode='{mode}'")
+        self._send_to_tts(f"Загружаю предмет {name}, минуту.")
+        try:
+            n = self.rag_model.reload_from_path(name, path, mode=mode)
+        except FileNotFoundError:
+            self._send_to_tts(f"Папка не найдена: {path}.")
+            return True
+        except ValueError as e:
+            self._send_to_tts(f"В папке нет файлов для загрузки.")
+            _agent_log(f"[TUTOR] reload_from_path ValueError: {e}")
+            return True
+        except Exception as e:
+            err = str(e)[:120]
+            self._send_to_tts(f"Не получилось загрузить: {err}.")
+            _agent_log(f"[TUTOR] reload_from_path failed: {e}")
+            traceback.print_exc()
+            return True
+        self._send_to_tts(f"Готово, загружено {n} фрагментов. Могу преподавать предмет {name}.")
+        return True
+
+    def _handle_tutor_topic_lecture(self, msg: str) -> bool:
+        """Detect 'расскажи про X' and start a lecture on that topic. Returns True if handled."""
+        if self._lecture_phase != "idle" or not msg:
+            return False
+        m = self._TOPIC_LECTURE_RE.search(msg.strip())
+        if not m:
+            return False
+        topic = m.group("topic").strip().rstrip(".!?,")
+        if len(topic) < 3:
+            return False
+        _agent_log(f"[TUTOR] Topic lecture request: '{topic}'")
+        # Verify the topic has RAG coverage
+        try:
+            results = self.rag_model.retrieve_full(topic) if self.rag_model else []
+        except Exception as e:
+            _agent_log(f"[TUTOR] retrieve_full failed: {e}")
+            results = []
+        if not results or results[0][1] > 1.5:
+            self._send_to_tts(
+                f"По теме {topic} у меня нет материалов. "
+                f"Сначала загрузи предмет — скажи: загрузи предмет такой-то из папки такой-то."
+            )
+            return True
+        # Start an individual short lecture
+        self.start_lecture(topic, duration_min=15)
+        return True
+
     def step(self):
         """Run a single iteration: wait for trigger → stream LLM → sentence TTS.
 
@@ -1114,6 +1187,14 @@ class CoreAgent(BaseAgent):
                 print(f"[AGENT] Stop command detected: '{last_student_msg}'")
                 self.ctx_swarm["tts_queue"].append({"text": "Хорошо, слушаю.", "emotion": "neutral"})
                 self._save_to_history("Хорошо, слушаю.")
+                return
+
+            # 2.5c Tutor: voice command "загрузи предмет X из папки Y"
+            if self._handle_tutor_load_subject(last_student_msg):
+                return
+
+            # 2.5d Tutor: voice command "расскажи мне про X" (start lecture on topic from RAG)
+            if self._handle_tutor_topic_lecture(last_student_msg):
                 return
 
             # 3. Inject cached student profile (from last meta-analysis)
