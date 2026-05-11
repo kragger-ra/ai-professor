@@ -17,8 +17,12 @@ FAST_MODEL = os.getenv("CORE_LLM_MODEL_NAME", "mistral/mistral-large-latest")
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
 
-STREAM_TOKEN_TIMEOUT_S = 10
-MAX_STREAM_TIME_S = 30
+STREAM_TOKEN_TIMEOUT_S = 30  # raised from 10 — local LLM prompt processing on
+                              # long context (RAG + personality) can take 15-25s
+                              # before first token; with streaming ThinkingFilter
+                              # the first content token now arrives once the
+                              # model writes TRIGGER_START.
+MAX_STREAM_TIME_S = 90  # 5000 tok / 100 tps + headroom for skeleton-driven long answers
 FORCE_FLUSH_IDLE_S = 8
 
 
@@ -99,23 +103,23 @@ class SentenceBuffer:
 # Streaming LLM call
 # =========================================================================
 
-def _stream_to_queue_lm_studio(messages, temperature, max_tokens, q):
+def _stream_to_queue_lm_studio(messages, temperature, max_tokens, q, stop=None):
     """Stream tokens from LM Studio local server, push to queue."""
     try:
         from agent.lm_studio_client import get_lm_studio_client
         client = get_lm_studio_client()
-        client.stream_chat_to_queue(messages, q, max_tokens, temperature)
+        client.stream_chat_to_queue(messages, q, max_tokens, temperature, stop=stop)
     except Exception as e:
         print(f"[STREAM LM] Error: {e}", flush=True)
         q.put(None)
 
 
-def _stream_to_queue_mistral(messages, temperature, max_tokens, q):
+def _stream_to_queue_mistral(messages, temperature, max_tokens, q, stop=None):
     """Run litellm streaming in a thread, push tokens to queue."""
     try:
         _api_base = os.getenv("CORE_LLM_API_BASE")
         _effective = _api_base if _api_base and _api_base != "NONE" else None
-        response = litellm.completion(
+        kwargs = dict(
             model=FAST_MODEL,
             messages=messages,
             max_tokens=max_tokens,
@@ -124,6 +128,9 @@ def _stream_to_queue_mistral(messages, temperature, max_tokens, q):
             timeout=STREAM_TOKEN_TIMEOUT_S,
             api_base=_effective,
         )
+        if stop:
+            kwargs["stop"] = stop
+        response = litellm.completion(**kwargs)
         token_count = 0
         for chunk in response:
             delta = chunk.choices[0].delta
@@ -138,27 +145,33 @@ def _stream_to_queue_mistral(messages, temperature, max_tokens, q):
         q.put(None)
 
 
-def _stream_to_queue(messages, temperature, max_tokens, q):
+def _stream_to_queue(messages, temperature, max_tokens, q, stop=None):
     """Dispatch to the configured backend; each backend is responsible for
     pushing tokens into ``q`` and terminating with ``q.put(None)``.
     """
     if USE_LOCAL_LLM:
-        _stream_to_queue_lm_studio(messages, temperature, max_tokens, q)
+        _stream_to_queue_lm_studio(messages, temperature, max_tokens, q, stop=stop)
     else:
-        _stream_to_queue_mistral(messages, temperature, max_tokens, q)
+        _stream_to_queue_mistral(messages, temperature, max_tokens, q, stop=stop)
 
 
 def stream_fast(messages: list, temperature: float = 0.6,
-                max_tokens: int = 500) -> Generator[str, None, None]:
-    """Stream tokens from fast model with hard timeout per chunk."""
+                max_tokens: int = 500,
+                stop: Optional[List[str]] = None) -> Generator[str, None, None]:
+    """Stream tokens from fast model with hard timeout per chunk.
+
+    `stop` is a list of strings; generation halts when any matches. The matched
+    sequence is NOT emitted in the output (standard llama.cpp behavior).
+    """
     import queue
     _model_label = "LM Studio (local)" if USE_LOCAL_LLM else FAST_MODEL
-    print(f"[STREAM] Calling {_model_label}, max_tokens={max_tokens}", flush=True)
+    print(f"[STREAM] Calling {_model_label}, max_tokens={max_tokens}"
+          + (f", stop={stop}" if stop else ""), flush=True)
 
     q = queue.Queue()
     t = threading.Thread(
         target=_stream_to_queue,
-        args=(messages, temperature, max_tokens, q),
+        args=(messages, temperature, max_tokens, q, stop),
         daemon=True,
     )
     t.start()
@@ -186,12 +199,41 @@ def stream_fast(messages: list, temperature: float = 0.6,
         yield token
 
 
+_SKELETON_MARKER_RE = re.compile(r"\s*\[ПУНКТ\s*\d+\]\s*")
+
+# Emotion tags like (neutral) / (thoughtful) / *happy* are leftovers from older
+# personas and not used by the current TTS engine. Strip them before sentences
+# go to the TTS queue so the synthesiser doesn't speak the tag literally.
+_EMOTION_TAG_RE = re.compile(
+    r"\s*[\*\(]\s*("
+    r"neutral|happy|sad|angry|scared|whispering|disgusted|sarcastic|"
+    r"thoughtful|encouraging"
+    r")\s*[\*\)]\s*",
+    re.IGNORECASE,
+)
+
+
+def _scrub(sentence: str) -> str:
+    """Remove inline orchestration markers (skeleton points, emotion tags)."""
+    cleaned = _SKELETON_MARKER_RE.sub(" ", sentence)
+    cleaned = _EMOTION_TAG_RE.sub(" ", cleaned)
+    return cleaned.strip()
+
+
 def stream_response_sentences(messages: list, temperature: float = 0.6,
-                              max_tokens: int = 500) -> Generator[str, None, str]:
+                              max_tokens: int = 500,
+                              stop: Optional[List[str]] = None,
+                              ) -> Generator[str, None, str]:
     """Stream LLM response and yield complete sentences.
 
     Yields sentences as they become complete.
     Returns full response text when generator exhausts.
+
+    `stop` is forwarded to the LLM backend (e.g. ["[END]"]) to halt generation
+    cleanly when the model writes a completion marker.
+
+    Skeleton markers like "[ПУНКТ N]" are stripped from emitted sentences but
+    retained in the full_response return value for upstream tracking.
 
     Usage:
         gen = stream_response_sentences(messages)
@@ -209,7 +251,7 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
     # "TRIGGER_START" are artifacts of the thinking filter and should be skipped.
     _trigger = "TRIGGER_START" if USE_LOCAL_LLM else None
 
-    for token in stream_fast(messages, temperature, max_tokens):
+    for token in stream_fast(messages, temperature, max_tokens, stop=stop):
         full_response += token
         sentences = buffer.add(token)
         for sentence in sentences:
@@ -218,6 +260,9 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
                 sentence = sentence.split(_trigger, 1)[-1].strip()
                 if not sentence:
                     continue
+            sentence = _scrub(sentence)
+            if not sentence:
+                continue
             _last_yield_time = time.time()
             yield sentence
 
@@ -228,6 +273,7 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
             if forced:
                 if _trigger and _trigger in forced:
                     forced = forced.split(_trigger, 1)[-1].strip()
+                forced = _scrub(forced)
                 if forced:
                     print(f"[STREAM] Force-flushing buffer after 8s: '{forced[:50]}'", flush=True)
                     _last_yield_time = time.time()
@@ -238,6 +284,7 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
     if remaining:
         if _trigger and _trigger in remaining:
             remaining = remaining.split(_trigger, 1)[-1].strip()
+        remaining = _scrub(remaining)
         if remaining:
             yield remaining
 

@@ -32,13 +32,14 @@ RESPONSE_TRIGGER = "TRIGGER_START"
 
 
 class ThinkingFilter:
-    """Filters leaked thinking from model output using a trigger word.
+    """Streaming filter that drops leaked thinking before TRIGGER_START.
 
     Models like Gemma 4 E4B with reasoning_effort=none dump internal planning
     into the content stream before the actual response. The system prompt
     instructs the model to begin every response with TRIGGER_START. This
-    filter buffers tokens until it sees the trigger, then streams only
-    the content after it.
+    filter buffers tokens until it sees the trigger, then streams everything
+    after it in real time so downstream consumers (sentence buffer → TTS)
+    can start playing immediately.
 
     Typical model output:
         "Нейронная сеть — это модель. (thoughtful)\nTRIGGER_START Ответ..."
@@ -48,31 +49,49 @@ class ThinkingFilter:
     def __init__(self, enabled: bool = True, trigger: str = RESPONSE_TRIGGER):
         self.enabled = enabled
         self.trigger = trigger
-        self._buffer = ""
-        self._streaming = False
+        self._pre_buffer = ""   # raw stream until trigger seen
+        self._triggered = False  # True once trigger encountered
 
     def process(self, token: str) -> Optional[str]:
-        """Buffer all tokens. Returns None — all output comes from flush()."""
+        """Return text to stream now, or None to keep buffering.
+
+        Once TRIGGER_START has been seen, every subsequent token is forwarded
+        as-is. Before that, tokens accumulate in pre_buffer and the trigger
+        boundary is searched; on hit, content after the trigger is emitted.
+        """
         if not self.enabled:
             return token
-        self._buffer += token
-        return None
+        if self._triggered:
+            return token
+        self._pre_buffer += token
+        if self.trigger not in self._pre_buffer:
+            return None
+        # Trigger boundary found — split, drop everything before, emit after.
+        after = self._pre_buffer.split(self.trigger, 1)[1].lstrip("\n")
+        self._pre_buffer = ""
+        self._triggered = True
+        return after if after else None
 
     def flush(self) -> Optional[str]:
-        """Extract clean response after the LAST trigger occurrence."""
-        if not self._buffer:
+        """Drain residual buffer at stream end.
+
+        After triggered: nothing left, returns None.
+        Filter disabled: pass through whatever was buffered.
+        Filter enabled but TRIGGER_START never emitted: return None (do NOT
+        leak the model's internal planning to TTS). Caller's retry path will
+        ask again. Earlier behavior was to pass thinking through as a "best
+        effort" fallback, which routed reasoning content straight to the
+        student. The hardened personality prompt mandates TRIGGER_START on
+        every turn, so absence of the marker is a stream we should drop.
+        """
+        if self._triggered:
             return None
         if not self.enabled:
-            return self._buffer
-
-        if self.trigger in self._buffer:
-            # Take content after the LAST trigger — handles model copying
-            # the system prompt example, multiple triggers, etc.
-            after = self._buffer.rsplit(self.trigger, 1)[1]
-            after = after.lstrip('\n').strip()
-            return after if after else self._buffer
-        # Trigger never found — return everything as fallback
-        return self._buffer
+            return self._pre_buffer or None
+        if self._pre_buffer:
+            preview = self._pre_buffer[:120].replace("\n", " ")
+            print(f"[ThinkingFilter] No TRIGGER_START in stream — dropping {len(self._pre_buffer)} chars (preview: '{preview}')")
+        return None
 
 
 class LMStudioClient:
@@ -178,6 +197,7 @@ class LMStudioClient:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         on_token: Optional[Callable[[str], None]] = None,
+        stop: Optional[List[str]] = None,
     ) -> Generator[str, None, None]:
         """Stream chat completion via SSE.
 
@@ -208,6 +228,8 @@ class LMStudioClient:
         # Disable thinking for models that support it (e.g. Gemma 4 E4B)
         if self.reasoning_effort:
             payload["reasoning_effort"] = self.reasoning_effort
+        if stop:
+            payload["stop"] = stop
 
         try:
             resp = self._session.post(
@@ -240,8 +262,13 @@ class LMStudioClient:
                     if "content" in delta and delta["content"]:
                         token = delta["content"]
                         if self.filter_thinking:
-                            # Buffer all tokens — flush extracts clean response
-                            thinking_filter.process(token)
+                            # Streaming filter: returns None until TRIGGER_START
+                            # is seen, then forwards subsequent tokens in real time.
+                            out = thinking_filter.process(token)
+                            if out:
+                                if on_token:
+                                    on_token(out)
+                                yield out
                         else:
                             if on_token:
                                 on_token(token)
@@ -273,6 +300,7 @@ class LMStudioClient:
         q: queue.Queue,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        stop: Optional[List[str]] = None,
     ):
         """Stream chat to a queue (for threading compatibility with existing code).
 
@@ -281,7 +309,7 @@ class LMStudioClient:
         """
         try:
             token_count = 0
-            for token in self.stream_chat(messages, max_tokens, temperature):
+            for token in self.stream_chat(messages, max_tokens, temperature, stop=stop):
                 q.put(token)
                 token_count += 1
             if token_count == 0:
