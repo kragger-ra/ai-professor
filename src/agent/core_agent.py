@@ -1144,6 +1144,100 @@ class CoreAgent(BaseAgent):
         re.IGNORECASE,
     )
 
+    _PROFILE_QUERY_RE = re.compile(
+        r"(?:покажи|расскажи|запроси|давай)\s+(?:мой\s+)?профиль|"
+        r"мой\s+профиль|"
+        r"что\s+ты\s+обо\s+мне\s+(?:знаешь|помнишь)|"
+        r"какие\s+у\s+меня\s+(?:слабые|трудные)\s+места|"
+        r"над\s+чем\s+(?:мне\s+)?поработать",
+        re.IGNORECASE,
+    )
+
+    _TOPIC_LEVEL_LABELS = {
+        1: "начинающий", 2: "базовый", 3: "средний", 4: "продвинутый", 5: "эксперт",
+    }
+    _WEAK_TOPIC_LEVEL_MAX = 2  # topic_level <= 2 → "слабое место"
+
+    def _handle_profile_query(self, msg: str) -> bool:
+        """Voice command 'покажи профиль' → speak public weak spots + recommendations.
+
+        Does NOT go through the LLM — pulls SQLite directly and pushes phrase to TTS.
+        Public scope only: known_issues + weak topic_levels. Never speaks
+        communication_style / personality_notes / background / mood.
+        """
+        if self._lecture_phase != "idle" or not msg:
+            return False
+        if not self._PROFILE_QUERY_RE.search(msg.strip()):
+            return False
+        _agent_log(f"[TUTOR] Profile query: '{msg[:60]}'")
+
+        if not self._profile_mgr or not self._current_student:
+            self._send_to_tts(
+                "Пока я не знаком с тобой. Назови имя, тогда смогу вести профиль."
+            )
+            return True
+
+        try:
+            student = self._profile_mgr.get_or_create_student(self._current_student)
+        except Exception as e:
+            _agent_log(f"[TUTOR] Profile read failed: {e}")
+            traceback.print_exc()
+            self._send_to_tts("Не получилось прочитать профиль, попробуй позже.")
+            return True
+
+        if student.get("total_interactions", 0) < 2:
+            self._send_to_tts(
+                "Пока недостаточно данных. Давай поработаем над материалом — позже покажу."
+            )
+            return True
+
+        import json as _json
+        issues_raw = student.get("known_issues") or "[]"
+        try:
+            issues = _json.loads(issues_raw) if isinstance(issues_raw, str) else list(issues_raw)
+        except Exception:
+            issues = []
+        topic_levels_raw = student.get("topic_levels") or "{}"
+        try:
+            topic_levels = _json.loads(topic_levels_raw) if isinstance(topic_levels_raw, str) else {}
+        except Exception:
+            topic_levels = {}
+
+        weak_topics = [t for t, lvl in topic_levels.items()
+                       if isinstance(lvl, int) and lvl <= self._WEAK_TOPIC_LEVEL_MAX]
+
+        parts = []
+        if issues:
+            parts.append("По нашим занятиям вижу следующие трудности: " + ", ".join(issues[:3]) + ".")
+        if weak_topics:
+            parts.append("Слабее всего темы: " + ", ".join(weak_topics[:3]) + ".")
+            parts.append("Рекомендую вернуться и проработать " + weak_topics[0] + " подробнее.")
+        elif issues:
+            parts.append("Рекомендую повторить разделы где были трудности.")
+
+        if not parts:
+            phrase = "Слабых мест пока не вижу. Идём дальше — спрашивай или выбирай новую тему."
+        else:
+            phrase = " ".join(parts)
+
+        # POST-MVP: full profile (tech_level, interests, total_interactions).
+        # Gated behind env flag — disabled by default.
+        if os.getenv("TUTOR_FULL_PROFILE") == "1":
+            tech = student.get("tech_level", 3)
+            tech_label = self._TOPIC_LEVEL_LABELS.get(tech, "средний")
+            total = student.get("total_interactions", 0)
+            try:
+                interests = _json.loads(student.get("topics_of_interest") or "[]")
+            except Exception:
+                interests = []
+            phrase += f" Общий уровень: {tech_label}. Занятий: {total}."
+            if interests:
+                phrase += " Интересы: " + ", ".join(interests[:3]) + "."
+
+        self._send_to_tts(phrase)
+        self._save_to_history(phrase)
+        return True
+
     def _handle_tutor_load_subject(self, msg: str) -> bool:
         """Detect 'загрузи предмет X из папки Y' and reload RAG. Returns True if handled."""
         if self._lecture_phase != "idle" or not msg:
@@ -1344,6 +1438,10 @@ class CoreAgent(BaseAgent):
 
             # 2.5d Tutor: voice command "расскажи мне про X" (start lecture on topic from RAG)
             if self._handle_tutor_topic_lecture(last_student_msg):
+                return
+
+            # 2.5e Tutor: voice command "покажи мой профиль" — public weak spots only
+            if self._handle_profile_query(last_student_msg):
                 return
 
             # 3. Inject cached student profile (from last meta-analysis)
