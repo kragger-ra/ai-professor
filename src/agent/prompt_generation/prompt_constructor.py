@@ -68,6 +68,13 @@ def construct_prompt(
     personality_key = ctx_swarm["states"].get("personality", "professor_default")
     personality_file = "personalities_professor" if "professor" in personality_key else "personalities"
     system_template = prompt_load(personality_file, personality_key)
+    # Substitute {COURSE_*} placeholders with the active course config.
+    try:
+        from lecture import course_config
+        system_template = course_config.get_current().render(system_template)
+    except Exception as _e:
+        # Course config is best-effort; never block prompt construction on it.
+        pass
 
     # Annotate RAG context based on confidence (L2 distance: lower = better)
     if rag_context:

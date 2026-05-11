@@ -339,6 +339,17 @@ class RagModel:
                 search_kwargs={"filter": {"kind": self.index_name}, "k": 3}
             )
         self._active_subject = name
+        # Course-level config (name/topic/teaching style) is shipped alongside
+        # the .md/.txt files in course_config.yml — apply it so subsequent
+        # prompts swap PersonaLab-isms for the loaded subject.
+        try:
+            yml_path = os.path.join(os.path.abspath(src_dir), "course_config.yml")
+            if os.path.isfile(yml_path):
+                from lecture import course_config
+                cfg = course_config.apply_from_yaml(yml_path)
+                print(f"[RAG] Course config applied: {cfg.fields.get('name')!r}")
+        except Exception as e:
+            print(f"[RAG] Failed to apply course_config.yml: {e}")
         print(f"[RagModel] reload_from_path: subject='{name}', mode='{mode}', "
               f"new_chunks={len(new_docs)}, total={len(self.docs)}")
         return len(new_docs)

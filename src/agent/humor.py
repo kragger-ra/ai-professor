@@ -174,7 +174,13 @@ def generate_humor(topic: str, humor_type: str) -> Optional[str]:
 
     examples_text = "\n".join(f"  {i+1}. {ex}" for i, ex in enumerate(examples))
 
-    prompt = f"""Ты — преподаватель IT-курса с сухим британским чувством юмора.
+    try:
+        from lecture import course_config
+        _course_name = course_config.get_current().fields.get("name", "")
+    except Exception:
+        _course_name = ""
+    _course_phrase = f"курса {_course_name}" if _course_name else "IT-курса"
+    prompt = f"""Ты — преподаватель {_course_phrase} с сухим британским чувством юмора.
 Ты никогда не шутишь. Ты говоришь правду ровным тоном. Люди сами решают, смешно или нет.
 
 Приём: {description}
