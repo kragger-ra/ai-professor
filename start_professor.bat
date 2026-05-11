@@ -5,9 +5,9 @@ title AI Professor - Starting...
 cd /d "%~dp0"
 
 echo [1/3] Starting VoiceMeeter Banana...
-tasklist /FI "IMAGENAME eq voicemeeterpro.exe" 2>/dev/null | find /i "voicemeeterpro.exe" >nul
+tasklist /FI "IMAGENAME eq voicemeeterpro_x64.exe" 2>nul | find /i "voicemeeterpro_x64.exe" >nul
 if errorlevel 1 (
-    start "" "C:\Program Files (x86)\VB\Voicemeeteroicemeeterpro.exe"
+    start "" "C:\Program Files (x86)\VB\Voicemeeter\voicemeeterpro_x64.exe"
     echo       Waiting for engine...
     timeout /t 5 /nobreak >nul
 ) else (
@@ -15,12 +15,12 @@ if errorlevel 1 (
 )
 
 echo [2/3] Starting Vosk TTS server...
-start "" /MIN "N:\exam\hVostic TTSenv\Scripts\python.exe" "N:\exam\hVostic TTS\server.py"
+start "" /MIN "N:\exam\hVostic TTS\venv\Scripts\python.exe" "N:\exam\LocalLLMExperement\hVostic TTS\server.py"
 echo       Waiting for TTS...
 timeout /t 10 /nobreak >nul
 
-echo [3/3] Starting AI Professor...
-start "" /MIN python src\main.py
+echo [3/3] Starting AI Professor (args: %*)...
+start "" /MIN python src\main.py %*
 echo       Waiting for Gradio...
 timeout /t 15 /nobreak >nul
 

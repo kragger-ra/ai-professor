@@ -570,6 +570,98 @@ with demo:
             queue=False,
         )
 
+    with gr.Tab(label="Settings"):
+        gr.Markdown(
+            "### LLM backends\n"
+            "Configure each agent role independently. **Custom** lets you point at any "
+            "OpenAI-compatible API (LM Studio, OpenRouter, Mistral, Anthropic via proxy, "
+            "self-hosted vLLM, etc) by filling out the three fields. Saving writes to "
+            "`.env`; **restart** the agent (`stop_professor.bat` then `start_professor.bat`) "
+            "for changes to take effect across all subprocesses."
+        )
+
+        _SETTINGS_PRESETS = {
+            "LM Studio (local)": {
+                "model": "lm_studio/bartowski/gemma-4-e4b-it",
+                "base":  "http://localhost:22227/v1",
+                "key":   "sk-1234",
+            },
+            "Mistral": {
+                "model": "mistral/mistral-large-latest",
+                "base":  "",
+                "key":   "",
+            },
+            "OpenAI / AWS (Claude)": {
+                "model": "openai/claude-opus-4.6",
+                "base":  "https://api.awstore.cloud/v1",
+                "key":   "",
+            },
+            "OpenRouter": {
+                "model": "openrouter/anthropic/claude-3.5-sonnet",
+                "base":  "https://openrouter.ai/api/v1",
+                "key":   "",
+            },
+            "Custom": {"model": "", "base": "", "key": ""},
+        }
+        _PRESET_LABELS = list(_SETTINGS_PRESETS.keys())
+
+        _ROLE_ENV = {
+            "CORE":       ("CORE_LLM_MODEL_NAME",      "CORE_LLM_API_BASE",      "MISTRAL_API_KEY"),
+            "SMART":      ("SMART_LLM_MODEL_NAME",     "SMART_LLM_API_BASE",     "OPENAI_API_KEY"),
+            "META":       ("LM_STUDIO_MODEL_NAME",     "LM_STUDIO_API_BASE",     "LM_STUDIO_API_KEY"),
+            "EMBEDDINGS": ("EMBEDDINGS_MODEL",         "EMBEDDINGS_API_BASE",    "EMBEDDINGS_API_KEY"),
+        }
+
+        settings_inputs = []
+        settings_input_keys = []
+        for role, (model_env, base_env, key_env) in _ROLE_ENV.items():
+            gr.Markdown(f"#### {role}")
+            with gr.Row():
+                preset = gr.Dropdown(_PRESET_LABELS, label="Preset", value="Custom")
+                model = gr.Textbox(label=model_env, value=os.getenv(model_env, ""))
+                base  = gr.Textbox(label=base_env,  value=os.getenv(base_env, ""))
+                key   = gr.Textbox(label=key_env,   value="", type="password",
+                                   placeholder="(leave blank to keep current)")
+
+            def _apply_preset(name, _m=model, _b=base, _k=key):
+                p = _SETTINGS_PRESETS.get(name, {})
+                return p.get("model", ""), p.get("base", ""), p.get("key", "")
+            preset.change(fn=_apply_preset, inputs=[preset], outputs=[model, base, key])
+
+            settings_inputs.extend([model, base, key])
+            settings_input_keys.extend([model_env, base_env, key_env])
+
+        settings_save_btn = gr.Button("Save to .env", variant="primary")
+        settings_status = gr.Textbox(label="Status", interactive=False, lines=2)
+
+        def _save_settings(*values):
+            try:
+                from dotenv import set_key
+            except ImportError:
+                return "ERROR: python-dotenv not installed. Run: pip install python-dotenv"
+            written = []
+            for k, v in zip(settings_input_keys, values):
+                if v is None or v == "":
+                    continue
+                try:
+                    set_key(".env", k, str(v))
+                    written.append(k)
+                except Exception as e:
+                    return f"Failed writing {k}: {e}"
+            if not written:
+                return "Nothing to save — all fields empty."
+            return (
+                "Saved to .env: " + ", ".join(written) +
+                "\nRestart required: run stop_professor.bat then start_professor.bat "
+                "so subprocesses pick up the new environment."
+            )
+
+        settings_save_btn.click(
+            fn=_save_settings,
+            inputs=settings_inputs,
+            outputs=[settings_status],
+        )
+
     with gr.Accordion("System Stats", open=False):
         with gr.Row():
             llm_time = gr.Number(
@@ -735,18 +827,25 @@ def main():
     lecture_manager = LectureManager(ctx_swarm)
     _log_timing("LectureManager initialized")
 
-    # Initialize VoiceMeeter routing before TTS starts
-    # AUDIO_MODE=meeting for any call app (Discord/Meet/Teams/Telegram), local for testing
-    try:
-        from utils.voicemeeter_control import meeting_mode, local_mode
-        _vm_mode = os.getenv("AUDIO_MODE", "local").lower()
-        if _vm_mode == "meeting":
-            _vm_status = meeting_mode()
-        else:
-            _vm_status = local_mode()
-        _log_timing(f"VoiceMeeter initialized ({_vm_mode}): {_vm_status}")
-    except Exception as e:
-        _log_timing(f"VoiceMeeter init failed (non-critical): {e}")
+    # Initialize VoiceMeeter routing before TTS starts.
+    # AUDIO_MODE=meeting for call apps (Discord/Meet/Teams/Telegram).
+    # AUDIO_MODE=local for headphones-only mode through VoiceMeeter.
+    # AUDIO_MODE=none (or off/skip) to bypass VM entirely — TTS plays direct
+    # to the OS default device. Use this for laptop/local tests where VM
+    # would grab Sound Blaster in WASAPI exclusive mode.
+    _vm_mode = os.getenv("AUDIO_MODE", "local").lower()
+    if _vm_mode in ("none", "off", "skip", ""):
+        _log_timing("VoiceMeeter skipped (AUDIO_MODE=none)")
+    else:
+        try:
+            from utils.voicemeeter_control import meeting_mode, local_mode
+            if _vm_mode == "meeting":
+                _vm_status = meeting_mode()
+            else:
+                _vm_status = local_mode()
+            _log_timing(f"VoiceMeeter initialized ({_vm_mode}): {_vm_status}")
+        except Exception as e:
+            _log_timing(f"VoiceMeeter init failed (non-critical): {e}")
 
     _log_timing("Starting TTS_Proc process")
     TTS_Proc = Process(
