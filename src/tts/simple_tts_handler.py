@@ -14,7 +14,9 @@ from typing import Optional
 
 from tts.audio_device import AudioProcessor
 from tts.vosk.vosk_tts import (
+    emotion_prosody,
     generate_silence,
+    pause_for_sentence,
     split_sentences,
     vosk_tts_sentence,
 )
@@ -28,7 +30,8 @@ if _TTS_BACKEND != "vosk":
 log = logging.getLogger("tts-handler")
 
 MAX_AUDIO_ALLOWED_TIME = 60  # seconds per TTS utterance
-INTRA_SENTENCE_PAUSE_S = 0.18
+# Inter-LLM-message base pause; intra-message pauses are computed per sentence
+# from punctuation (see pause_for_sentence) and scaled by emotion's pause_mul.
 INTER_ITEM_PAUSE_S = 0.35
 QUEUE_OVERFLOW_LIMIT = 10
 QUEUE_OVERFLOW_KEEP = 3
@@ -123,6 +126,8 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
         text = tts_dict.get("text", "").strip()
         if not text:
             continue
+        emotion = tts_dict.get("emotion", "neutral") or "neutral"
+        _, pause_mul = emotion_prosody(emotion)
 
         sentences = split_sentences(text)
 
@@ -139,7 +144,7 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
                 audio, sr = prefetch_future.result()
                 prefetch_future = None
             else:
-                audio, sr = vosk_tts_sentence(sentence)
+                audio, sr = vosk_tts_sentence(sentence, emotion)
 
             if len(audio) == 0:
                 continue
@@ -150,6 +155,7 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
 
             # Prefetch: look ahead — next sentence in this text, or next queue item
             next_to_prefetch = None
+            next_emotion = emotion
             if si + 1 < len(sentences):
                 next_to_prefetch = sentences[si + 1]
             elif len(tts_queue) > 0:
@@ -160,20 +166,24 @@ def _handle_vosk_queue_stream(audio_processor, ctx_swarm):
                         peek_sents = split_sentences(peek_text)
                         if peek_sents:
                             next_to_prefetch = peek_sents[0]
+                            next_emotion = peek.get("emotion", "neutral") or "neutral"
 
             if next_to_prefetch and prefetch_future is None:
-                prefetch_future = executor.submit(vosk_tts_sentence, next_to_prefetch)
+                prefetch_future = executor.submit(
+                    vosk_tts_sentence, next_to_prefetch, next_emotion
+                )
 
             # Play (blocking)
             audio_processor.play_sound(audio, sr, blocking=True)
             played += 1
 
-            # Micro-pause between sentences for natural pacing
+            # Variable pause: depends on this sentence's punctuation, scaled by emotion.
             if si + 1 < len(sentences):
-                pause_audio, pause_sr = generate_silence(INTRA_SENTENCE_PAUSE_S)
+                base_pause = pause_for_sentence(sentence)
+                pause_audio, pause_sr = generate_silence(base_pause * pause_mul)
                 audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
             elif len(tts_queue) > 0 and not _is_interrupt(tts_queue[0]):
-                pause_audio, pause_sr = generate_silence(INTER_ITEM_PAUSE_S)
+                pause_audio, pause_sr = generate_silence(INTER_ITEM_PAUSE_S * pause_mul)
                 audio_processor.play_sound(pause_audio, pause_sr, blocking=True)
 
             log.info(f"[TTS] #{played} audio: {audio_dur:.1f}s | '{sentence[:50]}'")

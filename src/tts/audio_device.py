@@ -14,6 +14,7 @@ import librosa
 import numpy as np
 import pygame
 import scipy.io.wavfile as wf
+import sounddevice as sd
 import soundcard as sc
 
 if __name__ == "__main__":
@@ -91,24 +92,31 @@ class AudioProcessor:
         return self._loop
 
     def setup_fx_device_pygame(self):
-        if not pygame.mixer.get_init():
-            try:
-                kwargs = {
-                    "frequency": SOUND_DEVICE_SR,
-                    "size": -16,
-                    "channels": 2,
-                    "devicename": FX_SOUND_DEVICE_OUT,
-                    "buffer": 7168,
-                }
-                pygame.mixer.pre_init(**kwargs)
-                pygame.mixer.init(**kwargs)
-            except Exception as e:
-                print("[Audio] FX DEVICE NOT CONFIGURED, setting to standart.", e)
-                pygame.mixer.pre_init()
-                pygame.mixer.init()
-            pygame.mixer.music.set_volume(0.5)
-        else:
+        """Initialize pygame mixer for FX sounds. Non-fatal if it fails — main
+        TTS uses soundcard (separate library) and does not depend on pygame."""
+        if pygame.mixer.get_init():
             print("[Audio] Pygame mixer already initialized.")
+            return
+        try:
+            kwargs = {
+                "frequency": SOUND_DEVICE_SR,
+                "size": -16,
+                "channels": 2,
+                "devicename": FX_SOUND_DEVICE_OUT,
+                "buffer": 7168,
+            }
+            pygame.mixer.pre_init(**kwargs)
+            pygame.mixer.init(**kwargs)
+            pygame.mixer.music.set_volume(0.5)
+            return
+        except Exception as e:
+            print(f"[Audio] FX device {FX_SOUND_DEVICE_OUT!r} init failed: {e}; trying default")
+        try:
+            pygame.mixer.pre_init()
+            pygame.mixer.init()
+            pygame.mixer.music.set_volume(0.5)
+        except Exception as e:
+            print(f"[Audio] Pygame default init failed: {e}; FX sounds DISABLED, main TTS unaffected")
 
     def _find_speaker_by_name(self, target_name: str):
         """Helper method to find speaker by name."""
@@ -134,6 +142,24 @@ class AudioProcessor:
             )
         else:
             print(f"[Audio] Main device found: {self.main_speaker.name}")
+
+        # Resolve a sounddevice output index for shared-mode playback (MME/DSound
+        # before WASAPI). Avoids exclusive capture that blocks other apps.
+        self._main_sd_index = self._find_sd_output_index(SOUND_DEVICE_OUT)
+        if self._main_sd_index is None:
+            print(
+                f"[Audio] sounddevice fallback to system default for '{SOUND_DEVICE_OUT}'"
+            )
+        else:
+            try:
+                info = sd.query_devices(self._main_sd_index)
+                api = sd.query_hostapis(info["hostapi"])["name"]
+                print(
+                    f"[Audio] sounddevice main idx={self._main_sd_index} "
+                    f"name='{info['name']}' api={api}"
+                )
+            except Exception as e:
+                print(f"[Audio] sounddevice info read failed: {e}")
 
     def _setup_fx_audio_devices(self):
         """Setup secondary (FX) audio output speaker."""
@@ -185,9 +211,9 @@ class AudioProcessor:
                     )
 
         if device is None and fx_device:
-            # sound_effect = pygame.sndarray.make_sound(fixed_audio)
-
-            # sound = pygame.sndarray.make_sound(fixed_audio)
+            if not pygame.mixer.get_init():
+                # FX sounds disabled (pygame init failed); silently skip.
+                return
             byte_io = save_audio_to_buffer(fixed_audio, target_sr)
             sound = pygame.mixer.Sound(byte_io)
             sound.play()
@@ -210,15 +236,55 @@ class AudioProcessor:
                     daemon=True,
                 ).start()
 
+    @staticmethod
+    def _find_sd_output_index(name: str) -> Optional[int]:
+        """Find a sounddevice output index matching `name` (substring, case-insensitive).
+
+        Prefers MME (hostapi 0) and DirectSound (hostapi 1) over WASAPI to avoid
+        exclusive-mode capture and let other apps mix audio on the same device.
+        """
+        if not name:
+            return None
+        lower = name.lower()
+        try:
+            devices = sd.query_devices()
+        except Exception:
+            return None
+        # Order: MME, DirectSound, then anything else.
+        priority = []
+        for i, d in enumerate(devices):
+            if d.get("max_output_channels", 0) <= 0:
+                continue
+            if lower not in d["name"].lower():
+                continue
+            api = d.get("hostapi", -1)
+            score = 0 if api == 0 else (1 if api == 1 else 2)
+            priority.append((score, i))
+        priority.sort()
+        return priority[0][1] if priority else None
+
     def _play_safe(self, speaker, audio, sr):
+        """Play `audio` to the main output via sounddevice (shared mode)."""
         start_time = time.time()
         try:
+            device_idx = getattr(self, "_main_sd_index", None)
+            if device_idx is None:
+                device_idx = self._find_sd_output_index(SOUND_DEVICE_OUT)
+                self._main_sd_index = device_idx
+            data = audio.astype(np.float32, copy=False)
+            if data.ndim == 1:
+                data = data.reshape(-1, 1)
             chunk_sz = 4800
-            with speaker.player(samplerate=sr) as sp:
-                for i in range(0, len(audio), chunk_sz):
+            with sd.OutputStream(
+                samplerate=sr,
+                channels=data.shape[1],
+                device=device_idx,
+                dtype="float32",
+            ) as stream:
+                for i in range(0, len(data), chunk_sz):
                     if self._last_interrupt_time > start_time:
                         break
-                    sp.play(audio[i : i + chunk_sz])
+                    stream.write(data[i : i + chunk_sz])
         except Exception as e:
             print(f"[Audio] Playback error: {e}")
 

@@ -23,6 +23,29 @@ VOSK_SPEAKER_ID = int(os.getenv("VOSK_SPEAKER_ID", "3"))
 VOSK_SPEECH_RATE = float(os.getenv("VOSK_SPEECH_RATE", "1.0"))
 VOSK_SAMPLE_RATE = 22050
 
+# Emotion → (speech_rate multiplier, pause_after multiplier).
+# Server is non-emotional Vosk-TTS, so the only knob we have is rate; the pause
+# multiplier is consumed by the queue handler when it inserts inter-sentence silence.
+# Keys must match the labels emitted by core_agent's _parse_emotion (lowercase English).
+EMOTION_PROSODY: dict[str, tuple[float, float]] = {
+    "neutral":     (1.00, 1.00),
+    "happy":       (1.05, 0.90),
+    "encouraging": (1.03, 0.95),
+    "thoughtful":  (0.92, 1.20),
+    "sad":         (0.90, 1.20),
+    "angry":       (1.08, 0.85),
+    "scared":      (1.05, 1.10),
+    "whispering":  (0.92, 1.05),
+    "disgusted":   (0.95, 1.05),
+    "sarcastic":   (0.95, 1.10),
+}
+
+
+def emotion_prosody(emotion: str | None) -> tuple[float, float]:
+    if not emotion:
+        return 1.0, 1.0
+    return EMOTION_PROSODY.get(emotion.lower(), (1.0, 1.0))
+
 # Phrase cache directory
 _CACHE_DIR = Path(__file__).resolve().parents[3] / "resources" / "Audio" / "tts_cache"
 
@@ -276,6 +299,32 @@ def generate_silence(duration_sec: float = 0.2) -> Tuple[np.ndarray, int]:
     return np.zeros(n_samples, dtype=np.float32), VOSK_SAMPLE_RATE
 
 
+# Variable pause durations keyed off the sentence's last meaningful character.
+# Tuned for dialog pacing (faster than narration).
+_PAUSE_ELLIPSIS = 0.45
+_PAUSE_QUESTION = 0.30
+_PAUSE_SENTENCE = 0.22  # . !
+_PAUSE_CLAUSE = 0.18    # , ; :
+_PAUSE_DEFAULT = 0.18
+
+
+def pause_for_sentence(sentence: str) -> float:
+    """Pick a pause length based on how the sentence ends."""
+    s = sentence.rstrip()
+    if not s:
+        return _PAUSE_DEFAULT
+    last = s[-1]
+    if last == "…" or s.endswith("..."):
+        return _PAUSE_ELLIPSIS
+    if last == "?":
+        return _PAUSE_QUESTION
+    if last in ".!":
+        return _PAUSE_SENTENCE
+    if last in ",;:":
+        return _PAUSE_CLAUSE
+    return _PAUSE_DEFAULT
+
+
 # =========================================================================
 # Core TTS function (drop-in replacement)
 # =========================================================================
@@ -284,9 +333,12 @@ def vosk_tts_emo(inp: dict) -> Tuple[np.ndarray, int]:
     """Same interface as fish_tts_emo / piper_tts_emo.
 
     inp = {"text": "...", "emotion": "neutral"}
-    Vosk-TTS ignores emotion. Returns (audio_float32, sample_rate).
+    The server is non-emotional, but we map the emotion to a speech_rate
+    multiplier so the prosody at least responds to the LLM's tag.
+    Returns (audio_float32, sample_rate).
     """
     text = inp.get("text", "")
+    emotion = inp.get("emotion", "")
     if not text.strip():
         return np.zeros(VOSK_SAMPLE_RATE // 2, dtype=np.float32), VOSK_SAMPLE_RATE
 
@@ -313,6 +365,9 @@ def vosk_tts_emo(inp: dict) -> Tuple[np.ndarray, int]:
         log.info(f"[TTS] cache hit: '{text[:40]}'")
         return cached
 
+    rate_mul, _ = emotion_prosody(emotion)
+    effective_rate = VOSK_SPEECH_RATE * rate_mul
+
     t0 = time.perf_counter()
     try:
         response = requests.post(
@@ -320,7 +375,7 @@ def vosk_tts_emo(inp: dict) -> Tuple[np.ndarray, int]:
             json={
                 "text": text,
                 "speaker_id": VOSK_SPEAKER_ID,
-                "speech_rate": VOSK_SPEECH_RATE,
+                "speech_rate": effective_rate,
             },
             timeout=30,
         )
@@ -344,6 +399,6 @@ def vosk_tts_emo(inp: dict) -> Tuple[np.ndarray, int]:
     return audio, sr
 
 
-def vosk_tts_sentence(text: str) -> Tuple[np.ndarray, int]:
+def vosk_tts_sentence(text: str, emotion: str = "neutral") -> Tuple[np.ndarray, int]:
     """Synthesize a single sentence. Checks cache, calls server, post-processes."""
-    return vosk_tts_emo({"text": text, "emotion": "neutral"})
+    return vosk_tts_emo({"text": text, "emotion": emotion})

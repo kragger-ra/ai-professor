@@ -32,7 +32,7 @@ BLOCK_DURATION_MS = 100  # ms per read block
 BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION_MS / 1000)
 
 # VAD params — energy-based
-SILENCE_THRESHOLD = 200  # RMS threshold (tuned for fifine on low gain)
+SILENCE_THRESHOLD = 100  # RMS threshold (lowered from 200 to catch quiet word onsets)
 SPEECH_MIN_BLOCKS = 4  # min blocks (~0.4s) to count as speech
 SILENCE_AFTER_SPEECH_BLOCKS = 10  # ~1.0s of silence to finalize (was 5/0.5s)
 

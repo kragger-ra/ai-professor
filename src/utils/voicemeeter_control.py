@@ -37,6 +37,13 @@ _REQUIRED_DEVICES = (
 
 def _get_vm():
     global _vm
+    # AUDIO_MODE=none|off|skip disables ALL VoiceMeeter interaction. Without
+    # this gate, Gradio's demo.load(get_status) at page open would call
+    # voicemeeterlib.api("banana").login() which auto-launches voicemeeterpro_x64
+    # and grabs Sound Blaster in WASAPI exclusive mode.
+    import os
+    if os.getenv("AUDIO_MODE", "local").lower() in ("none", "off", "skip", ""):
+        return None
     if _vm is None:
         try:
             import voicemeeterlib

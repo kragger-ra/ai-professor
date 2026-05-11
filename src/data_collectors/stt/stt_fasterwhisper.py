@@ -47,7 +47,7 @@ class FasterWhisperSTT:
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=500,
-                speech_pad_ms=200,
+                speech_pad_ms=400,
             ),
         )
         # print(segments, info)
