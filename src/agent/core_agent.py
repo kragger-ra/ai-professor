@@ -38,7 +38,12 @@ from agent.streaming_orchestrator import stream_response_sentences
 from agent.meta_agent import analyze_context, build_meta_instruction, extract_student_info
 from lecture.student_profiles import StudentProfileManager
 from utils.patterns import BACKCHANNEL_PATTERNS
-from lecture.lecture_delivery import LectureDelivery, prepare_lecture, DELIVERY_SYSTEM_PROMPT
+from lecture.lecture_delivery import (
+    LectureDelivery,
+    prepare_lecture,
+    generate_quiz_questions,
+    DELIVERY_SYSTEM_PROMPT,
+)
 from agent.humor import try_humor
 from config_schema.general import get_name
 from utils.debug import bcolors
@@ -72,13 +77,31 @@ def _parse_emotion(comment: str) -> tuple:
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
 
 # Core timing/budget constants (extracted from scattered literals)
-LECTURE_STREAM_TIMEOUT_S = 25           # hard cap per lecture block stream
-LECTURE_BLOCK_MAX_TOKENS = 300
-LECTURE_QA_MAX_TOKENS = 200
+LECTURE_STREAM_TIMEOUT_S = 30           # hard cap per lecture block stream
+# Lecture blocks are pre-structured (3-6 sentences each), don't need huge budget.
+# RESPONSE_MAX_TOKENS_LONG stays at 5000 for free-form explanations.
+LECTURE_BLOCK_MAX_TOKENS = 1500
+LECTURE_QA_MAX_TOKENS = 800
 LECTURE_TEMPERATURE = 0.6
 LECTURE_QA_TEMPERATURE = 0.5
-RESPONSE_MAX_TOKENS_SHORT = 150         # used for short student messages (<25 chars)
-RESPONSE_MAX_TOKENS_LONG = 500
+# Short student messages used to get a tiny budget (300) under the assumption
+# they imply tiny answers. In practice "Хорошо, продолжайте" or "Поясни?" need
+# room for a full continuation. Aligning both caps avoids mid-sentence cutoff.
+RESPONSE_MAX_TOKENS_SHORT = 2000
+RESPONSE_MAX_TOKENS_LONG = 5000
+
+# Skeleton-driven response (two-pass): outline first, then deliver to plan.
+# Phase 1: triggered for explanatory questions; Phase 2 will add per-point tracking.
+SKELETON_OUTLINE_MAX_TOKENS = 250       # Pass 1 budget — just the bullet list
+SKELETON_END_MARKER = "[END]"           # stop sequence for Pass 2
+SKELETON_TRIGGERS = (                   # heuristic: detect explanation requests
+    "объясни", "расскажи", "что такое", "что это", "почему",
+    "как работает", "как устроен", "как сделать", "как ",
+    "сравни", "разверни", "подробно", "приведи пример", "пример",
+    "опиши", "разбери", "поясни", "в чём разница", "в чем разница",
+    "повтори", "с начала", "запутал", "не понял",
+)
+SKELETON_LONG_MSG_THRESHOLD = 50
 RESPONSE_TEMPERATURE_LOW = 0.4
 RESPONSE_TEMPERATURE_HIGH = 0.75
 TTS_POLL_INTERVAL_S = 0.3
@@ -88,10 +111,40 @@ POST_INTERRUPT_PAUSE_S = 2
 CHECK_QUESTION_DELAY_S = 1.5
 POST_INTERRUPT_REENTRY_PAUSE_S = 1.0
 AGENT_ERROR_BACKOFF_S = 3
+# Q&A audience phase: silence threshold before nudging / advancing
+QA_AUDIENCE_SILENCE_S = 15
+QA_AUDIENCE_MAX_STRIKES = 2
+QA_POLL_INTERVAL_S = 0.5
+QUIZ_QUESTIONS_COUNT = 3
+LECTURE_FAREWELL_PHRASE = "Спасибо за ваше внимание. На этом наше занятие закончено."
 BREAK_REMINDER_THRESHOLD_S = 3600       # 60 min
 SILENCE_HINT_SHORT_S = 10
 SILENCE_HINT_LONG_S = 30
 STREAM_TOKEN_TIMEOUT_S = 10             # per-token idle timeout in streaming_orchestrator
+
+
+def _should_use_skeleton(student_msg: str) -> bool:
+    """Decide whether to plan-then-deliver via the skeleton mechanism.
+
+    Disabled by default (USE_SKELETON env var). Pass 2 with [END] stop on
+    Gemma 4 E4B currently truncates at 0 tokens — model emits the marker
+    inside its thinking, killing the stream before TRIGGER_START. Re-enable
+    after debugging the marker placement.
+
+    Heuristic: explanatory keywords trigger regardless of length; without a
+    trigger, only longer messages (>=50 chars) qualify. Short greetings,
+    backchannels and yes/no responses skip the two-pass flow.
+    """
+    if os.getenv("USE_SKELETON", "false").lower() not in ("true", "1", "yes"):
+        return False
+    if not student_msg:
+        return False
+    msg = student_msg.strip()
+    msg_lower = msg.lower()
+    if any(trigger in msg_lower for trigger in SKELETON_TRIGGERS):
+        # Still skip ultra-short triggers like "как?" alone — needs context.
+        return len(msg) >= 8
+    return len(msg) >= SKELETON_LONG_MSG_THRESHOLD
 
 
 def _agent_log(msg):
@@ -203,12 +256,19 @@ class CoreAgent(BaseAgent):
         self._session_start_time = time.time()
         self._break_suggested = False
 
-        # Lecture mode
-        self._lecture_mode = False
+        # Lecture FSM: idle | delivering | qa_audience | qa_quiz | farewell
+        self._lecture_phase = "idle"
         self._lecture_delivery = None
         self._lecture_waiting_reply = False  # waiting for check_question answer
         self._lecture_paused = False         # student said "stop/wait"
         self._lecture_last_handled_ts = 0    # timestamp of last handled student msg
+        # Q&A audience phase state
+        self._qa_silence_start = 0.0
+        self._qa_no_q_strikes = 0
+        self._qa_chat_baseline = 0
+        # Q&A quiz phase state
+        self._quiz_questions: list[str] = []
+        self._quiz_idx = 0
 
         if ctx_host is None:
             self.ctx_host = CtxHost(ctx_handler)
@@ -388,6 +448,50 @@ class CoreAgent(BaseAgent):
         from langchain_core.messages import SystemMessage
         return SystemMessage(content=content)
 
+    def _build_outline(self, base_messages: list) -> Optional[str]:
+        """Pass 1 of the skeleton flow — request a short outline, hidden from TTS.
+
+        Synchronous (collects tokens then returns). Strips TRIGGER_START leakage.
+        Returns the outline text or None if generation failed.
+        """
+        from agent.streaming_orchestrator import stream_fast
+        outline_request = (
+            "Сначала кратко составь план будущего ответа: 4-7 пунктов "
+            "в формате нумерованного списка. Только короткие заголовки пунктов, "
+            "без раскрытия и пояснений. После списка ничего не пиши. "
+            "Этот план будет основой подробного объяснения студенту.\n"
+            "Начни ответ со слова TRIGGER_START, потом сразу нумерованный список."
+        )
+        outline_messages = list(base_messages) + [
+            self._build_system_msg(outline_request)
+        ]
+        if not self._use_local_llm:
+            outline_messages = self._to_dicts(outline_messages)
+
+        full = ""
+        try:
+            for token in stream_fast(
+                outline_messages,
+                temperature=0.4,
+                max_tokens=SKELETON_OUTLINE_MAX_TOKENS,
+            ):
+                full += token
+        except Exception as e:
+            _agent_log(f"[SKELETON] outline error: {e}")
+            return None
+
+        if "TRIGGER_START" in full:
+            full = full.rsplit("TRIGGER_START", 1)[-1]
+        full = full.strip()
+        return full or None
+
+    @staticmethod
+    def _outline_has_points(outline: str) -> bool:
+        """Quick sanity check — outline should contain at least 2 enumerated points."""
+        if not outline:
+            return False
+        return len(re.findall(r"^\s*\d+[\.\)]", outline, flags=re.MULTILINE)) >= 2
+
     @staticmethod
     def _to_dicts(messages) -> list:
         """Convert langchain messages to plain dicts for litellm."""
@@ -483,7 +587,7 @@ class CoreAgent(BaseAgent):
         _agent_log(f"[LECTURE] Loading plan from: {plan_path}")
         try:
             self._lecture_delivery = LectureDelivery.load_plan(plan_path)
-            self._lecture_mode = True
+            self._lecture_phase = "delivering"
             self._lecture_waiting_reply = False
             self._send_to_tts(f"Начинаем лекцию: {self._lecture_delivery.topic}.")
             _agent_log(f"[LECTURE] Loaded: {self._lecture_delivery.total_blocks} blocks")
@@ -504,7 +608,7 @@ class CoreAgent(BaseAgent):
         try:
             plan = prepare_lecture(topic, rag_context, duration_min)
             self._lecture_delivery = LectureDelivery(plan)
-            self._lecture_mode = True
+            self._lecture_phase = "delivering"
             self._lecture_waiting_reply = False
 
             # Save plan for debugging
@@ -520,10 +624,12 @@ class CoreAgent(BaseAgent):
 
     def stop_lecture(self):
         """Stop lecture and return to normal mode."""
-        self._lecture_mode = False
+        self._lecture_phase = "idle"
         self._lecture_delivery = None
         self._lecture_waiting_reply = False
         self._lecture_paused = False
+        self._quiz_questions = []
+        self._quiz_idx = 0
         _agent_log("[LECTURE] Stopped")
 
     def _check_for_new_student_msg(self) -> str:
@@ -542,14 +648,12 @@ class CoreAgent(BaseAgent):
         """One iteration of lecture delivery loop."""
         delivery = self._lecture_delivery
         if not delivery or not delivery.active:
-            self._send_to_tts("На этом лекция закончена. Есть вопросы по всему материалу?")
-            self.stop_lecture()
+            self._enter_qa_audience()
             return
 
         block = delivery.get_current_block()
         if block is None:
-            self._send_to_tts("Лекция завершена. Спрашивайте, если что-то осталось непонятным.")
-            self.stop_lecture()
+            self._enter_qa_audience()
             return
 
         _agent_log(f"[LECTURE] Block {delivery.progress}: type={block.get('type')}, "
@@ -655,20 +759,32 @@ class CoreAgent(BaseAgent):
         # Reuse the main handler but with pre-fetched message
         self._handle_lecture_interrupt(_override_msg=student_msg)
 
-    def _handle_lecture_interrupt(self, _override_msg: str = None):
+    _END_LECTURE_PHRASES = (
+        "завершаем пару", "заканчиваем пару", "конец пары", "закончим пару",
+        "завершаем занятие", "заканчиваем занятие",
+    )
+
+    def _handle_lecture_interrupt(self, _override_msg: str = None, _resume_after: bool = True):
         """Handle a student message during lecture delivery.
 
         Any incoming sound = TTS paused (already happened at STT level).
         We wait for transcription, then decide:
+        - End-lecture command → farewell
         - Empty/noise → resume where we stopped
         - Backchannel → resume
         - Repeat request → re-explain block
-        - Question → answer separately, then resume
+        - Question → answer separately, then resume (if _resume_after)
         """
         student_msg = _override_msg or self._check_for_new_student_msg()
 
         msg_lower = (student_msg or "").strip().lower().rstrip(".!?,")
         _agent_log(f"[LECTURE] Student said: '{(student_msg or '')[:60]}'")
+
+        # End-lecture voice command — overrides everything else
+        if msg_lower and any(p in msg_lower for p in self._END_LECTURE_PHRASES):
+            _agent_log("[LECTURE] End-lecture command detected")
+            self._enter_farewell()
+            return
 
         # Empty message or noise — resume lecture
         if not msg_lower:
@@ -737,8 +853,151 @@ class CoreAgent(BaseAgent):
 
         # Brief pause then continue lecture from where we stopped
         time.sleep(POST_INTERRUPT_PAUSE_S)
-        self._send_to_tts("Продолжаем.")
-        _agent_log("[LECTURE] Resuming after question")
+        if _resume_after:
+            self._send_to_tts("Продолжаем.")
+            _agent_log("[LECTURE] Resuming after question")
+        else:
+            _agent_log("[LECTURE] Question answered (no resume — not in delivery phase)")
+
+    def _enter_qa_audience(self):
+        """Transition delivering → qa_audience. Open-floor questions from audience."""
+        _agent_log("[LECTURE] → qa_audience")
+        self._lecture_phase = "qa_audience"
+        self._qa_silence_start = time.time()
+        self._qa_no_q_strikes = 0
+        self._send_to_tts("На этом основная часть лекции закончена. Есть вопросы по материалу?")
+
+    def _qa_audience_step(self):
+        """Listen for free-form audience questions; after silence, move to quiz."""
+        msg = self._check_for_new_student_msg()
+        if msg:
+            msg_lower = msg.strip().lower().rstrip(".!?,")
+            # End-lecture command — overrides everything
+            if any(p in msg_lower for p in self._END_LECTURE_PHRASES):
+                _agent_log("[LECTURE] End-lecture command in qa_audience")
+                self._enter_farewell()
+                return
+            # Skip pure backchannel
+            if msg_lower in BACKCHANNEL_PATTERNS:
+                self._qa_silence_start = time.time()
+                return
+            # Treat as a question — answer with RAG via existing handler (no resume hint)
+            self._handle_lecture_interrupt(_override_msg=msg, _resume_after=False)
+            if self._lecture_phase != "qa_audience":
+                return  # phase changed (farewell triggered inside handler)
+            self._qa_silence_start = time.time()
+            self._qa_no_q_strikes = 0
+            return
+
+        # No new message — check silence
+        if time.time() - self._qa_silence_start > QA_AUDIENCE_SILENCE_S:
+            self._qa_no_q_strikes += 1
+            if self._qa_no_q_strikes >= QA_AUDIENCE_MAX_STRIKES:
+                self._enter_qa_quiz()
+                return
+            self._send_to_tts("Ещё вопросы?")
+            self._qa_silence_start = time.time()
+            return
+        time.sleep(QA_POLL_INTERVAL_S)
+
+    def _enter_qa_quiz(self):
+        """Transition qa_audience → qa_quiz. Generate and ask check questions."""
+        _agent_log("[LECTURE] → qa_quiz")
+        delivered = (self._lecture_delivery.blocks_delivered
+                     if self._lecture_delivery else [])
+        topic = self._lecture_delivery.topic if self._lecture_delivery else ""
+        self._send_to_tts("А теперь несколько проверочных вопросов.")
+        try:
+            self._quiz_questions = generate_quiz_questions(
+                delivered, n=QUIZ_QUESTIONS_COUNT, topic=topic,
+            )
+        except Exception as e:
+            _agent_log(f"[LECTURE] Quiz generation failed: {e}")
+            traceback.print_exc()
+            self._quiz_questions = []
+        self._quiz_idx = 0
+        self._lecture_phase = "qa_quiz"
+        if not self._quiz_questions:
+            _agent_log("[LECTURE] No quiz questions generated, skipping to farewell")
+            self._enter_farewell()
+            return
+        # Ask the first question and wait for answer
+        self._ask_quiz_question(self._quiz_questions[0])
+
+    def _ask_quiz_question(self, question: str):
+        """Speak a quiz question and arm the wait-for-reply state."""
+        time.sleep(CHECK_QUESTION_DELAY_S)
+        self._send_to_tts(question)
+        self._save_to_history(question)
+        self._waiting_for_reply = True
+        self._silence_hint_sent = False
+        self._last_response_time = time.time()
+
+    def _qa_quiz_step(self):
+        """Process student answers to quiz questions one by one."""
+        msg = self._check_for_new_student_msg()
+        if not msg:
+            time.sleep(QA_POLL_INTERVAL_S)
+            return
+
+        msg_lower = msg.strip().lower().rstrip(".!?,")
+        # End-lecture command
+        if any(p in msg_lower for p in self._END_LECTURE_PHRASES):
+            _agent_log("[LECTURE] End-lecture command in qa_quiz")
+            self._waiting_for_reply = False
+            self._enter_farewell()
+            return
+        # Skip backchannel — wait for real answer
+        if msg_lower in BACKCHANNEL_PATTERNS:
+            return
+
+        # This is the answer to current quiz question
+        # (student msg is already in ctx_chat via STT — no need to save again)
+        self._waiting_for_reply = False
+        _agent_log(f"[LECTURE] Quiz answer #{self._quiz_idx + 1}: '{msg[:80]}'")
+        # Short acknowledgement (Lecture mode: no grading; Tutor will override)
+        ack = "Хорошо, спасибо."
+        self._send_to_tts(ack)
+        self._save_to_history(ack)
+
+        self._quiz_idx += 1
+        if self._quiz_idx >= len(self._quiz_questions):
+            # All questions answered → farewell
+            self._enter_farewell()
+            return
+        # Ask next question
+        self._ask_quiz_question(self._quiz_questions[self._quiz_idx])
+
+    def _enter_farewell(self):
+        """Speak farewell and stop the lecture cleanly."""
+        _agent_log("[LECTURE] → farewell")
+        self._lecture_phase = "farewell"
+        self._waiting_for_reply = False
+        self._silence_hint_sent = False
+        self._send_to_tts(LECTURE_FAREWELL_PHRASE)
+        self._save_to_history(LECTURE_FAREWELL_PHRASE)
+
+        # Kick off auto-summary export in the background BEFORE TTS drain wait,
+        # so SMART_MODEL latency (~10s) overlaps with farewell playback.
+        try:
+            import threading
+            from lecture.lecture_delivery import export_lecture_summary as _export
+            _delivery = self._lecture_delivery
+            _ctx_snapshot = list(self.ctx_handler.ctx_chat)
+            _quiz = list(self._quiz_questions or [])
+            threading.Thread(
+                target=_export,
+                args=(_delivery, _ctx_snapshot, _quiz, "data/lecture_summaries"),
+                daemon=True,
+            ).start()
+        except Exception as e:
+            _agent_log(f"[LECTURE-SUMMARY] Failed to start export thread: {e}")
+
+        # Wait for TTS queue to drain so the farewell actually plays out
+        wait_start = time.time()
+        while len(self.ctx_swarm["tts_queue"]) > 0 and time.time() - wait_start < 60:
+            time.sleep(TTS_POLL_INTERVAL_S)
+        self.stop_lecture()
 
     def step(self):
         """Run a single iteration: wait for trigger → stream LLM → sentence TTS.
@@ -777,13 +1036,21 @@ class CoreAgent(BaseAgent):
                     self.start_lecture(_lecture_cmd)
                 return
 
-            # Lecture mode dispatch
-            if self._lecture_mode and self._lecture_delivery:
-                _agent_log(f"[LECTURE] step() — block {self._lecture_delivery.progress}")
+            # Lecture FSM dispatch
+            if self._lecture_phase != "idle":
+                _agent_log(f"[LECTURE] step() phase={self._lecture_phase}")
                 try:
-                    self._lecture_step()
+                    if self._lecture_phase == "delivering":
+                        self._lecture_step()
+                    elif self._lecture_phase == "qa_audience":
+                        self._qa_audience_step()
+                    elif self._lecture_phase == "qa_quiz":
+                        self._qa_quiz_step()
+                    elif self._lecture_phase == "farewell":
+                        # farewell is synchronous inside _enter_farewell, this should not normally hit
+                        time.sleep(0.2)
                 except Exception as e:
-                    _agent_log(f"[LECTURE] ERROR in _lecture_step: {e}")
+                    _agent_log(f"[LECTURE] ERROR in phase={self._lecture_phase}: {e}")
                     traceback.print_exc()
                     time.sleep(AGENT_ERROR_BACKOFF_S)
                 return
@@ -885,20 +1152,69 @@ class CoreAgent(BaseAgent):
             # Short messages get fewer tokens to prevent hallucination dumps
             _max_tokens = (RESPONSE_MAX_TOKENS_SHORT if len(last_student_msg) < 25
                            else RESPONSE_MAX_TOKENS_LONG)
+            _chat_len_before = len(self.ctx_handler.ctx_chat)
+            interrupted = False
+
+            # 4a. Optional skeleton pass: build a hidden outline, then deliver
+            # against it with a [END] stop sequence so the model halts when the
+            # plan is fully covered (no overshoot to max_tokens).
+            outline_text: Optional[str] = None
+            stop_sequences: Optional[list] = None
+            if self._use_local_llm and _should_use_skeleton(last_student_msg):
+                # Skeleton fills out a multi-point plan; SHORT cap (300) starves it.
+                # Force LONG cap so Pass 2 can complete and emit [END] cleanly.
+                _max_tokens = RESPONSE_MAX_TOKENS_LONG
+                _t_outline = time.perf_counter()
+                outline_text = self._build_outline(messages)
+                _outline_ms = (time.perf_counter() - _t_outline) * 1000
+                if outline_text and self._outline_has_points(outline_text):
+                    _agent_log(
+                        f"[SKELETON] outline ({_outline_ms:.0f}ms): "
+                        f"{outline_text[:200].replace(chr(10), ' | ')}"
+                    )
+                    # Pass 2 messages: original chat + outline as assistant turn
+                    # + delivery instructions as system message.
+                    delivery_instructions = (
+                        "Теперь развёрнуто объясни студенту по плану выше. "
+                        "Каждый пункт — 2-4 связных предложения, говори естественно, "
+                        "не цитируй сам план буквально, не пиши номера пунктов как часть текста. "
+                        f"Когда полностью раскроешь все пункты, напиши {SKELETON_END_MARKER} "
+                        "и больше ничего не пиши.\n"
+                        "Обязательно начни ответ со слова TRIGGER_START."
+                    )
+                    messages = list(messages) + [
+                        {"role": "assistant", "content": outline_text}
+                        if self._use_local_llm
+                        else self._build_system_msg(outline_text),
+                        self._build_system_msg(delivery_instructions),
+                    ]
+                    stop_sequences = [SKELETON_END_MARKER]
+                    # Check interrupt before starting Pass 2
+                    if len(self.ctx_handler.ctx_chat) > _chat_len_before:
+                        _agent_log("[SKELETON] interrupted during outline — abort")
+                        return
+                else:
+                    _agent_log(
+                        f"[SKELETON] outline rejected ({_outline_ms:.0f}ms), falling back"
+                    )
+                    outline_text = None
+
             t0 = time.perf_counter()
             messages_dicts = messages if self._use_local_llm else self._to_dicts(messages)
             _llm_label = "LM Studio (local)" if self._use_local_llm else "Mistral API"
-            _agent_log(f"[AGENT] Starting LLM stream via {_llm_label} (max_tokens={_max_tokens}, "
-                  f"msg='{last_student_msg[:50]}')")
+            _agent_log(
+                f"[AGENT] Starting LLM stream via {_llm_label} "
+                f"(max_tokens={_max_tokens}, skeleton={bool(outline_text)}, "
+                f"msg='{last_student_msg[:50]}')"
+            )
             spoken_sentences = []   # sentences actually sent to TTS
             sentence_count = 0
-            _chat_len_before = len(self.ctx_handler.ctx_chat)
-            interrupted = False
 
             for sentence in stream_response_sentences(
                 messages_dicts,
                 temperature=random.uniform(RESPONSE_TEMPERATURE_LOW, RESPONSE_TEMPERATURE_HIGH),
                 max_tokens=_max_tokens,
+                stop=stop_sequences,
             ):
                 # Check: student started speaking → wait for STT
                 if self.ctx_swarm["voice"].get("student_speaking"):

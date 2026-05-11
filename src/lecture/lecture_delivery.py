@@ -23,7 +23,10 @@ DELIVERY_SYSTEM_PROMPT = (
     "Говори 3-6 предложений на этот блок, не больше. "
     "НИКОГДА не начинай предложение со слова 'Представьте'. Используй 'Допустим', 'Вот пример', 'Смотрите'. "
     "Русский язык. Мужской род. "
-    "Тег настроения в конце: (neutral) (happy) (thoughtful) (encouraging)."
+    "Не вставляй теги настроения в скобках — TTS их озвучивает.\n"
+    "\nОБЯЗАТЕЛЬНО: Начинай КАЖДЫЙ ответ со слова TRIGGER_START — без исключений. "
+    "Всё до TRIGGER_START не будет произнесено вслух студенту. "
+    "Пример: TRIGGER_START Сегодня поговорим про кадровую политику."
 )
 
 
@@ -88,6 +91,236 @@ def prepare_lecture(topic: str, rag_context: str, duration_min: int = 30) -> dic
     print(f"[LECTURE] Plan generated: {len(plan.get('blocks', []))} blocks, "
           f"topic='{plan.get('topic', topic)}'")
     return plan
+
+
+def generate_quiz_questions(blocks_delivered: list, n: int = 3, topic: str = "") -> list:
+    """Generate N short check questions based on delivered blocks' key_points.
+
+    Returns a list of question strings. Falls back to picking key_points directly
+    if the LLM call fails.
+    """
+    if not blocks_delivered:
+        return []
+
+    # Compact block summary: id + first 2 key_points each
+    summary_lines = []
+    for b in blocks_delivered:
+        kp = b.get("key_points", [])[:2]
+        if kp:
+            summary_lines.append(f"- блок {b.get('id', '?')}: {'; '.join(kp)}")
+    summary = "\n".join(summary_lines)
+
+    prompt = f"""На основе ключевых тезисов прочитанной лекции составь {n} коротких проверочных вопросов.
+Вопросы должны проверять понимание ключевых концепций, а не дословное запоминание.
+Каждый вопрос — одно предложение, на 5-15 секунд размышления.
+
+Тема лекции: {topic or '(не указана)'}
+Тезисы по блокам:
+{summary}
+
+Ответь ТОЛЬКО JSON-списком из {n} строк, без markdown. Пример: ["Вопрос 1?", "Вопрос 2?", "Вопрос 3?"]"""
+
+    kwargs = {
+        "model": SMART_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 600,
+        "temperature": 0.4,
+    }
+    if SMART_MODEL_API_BASE:
+        kwargs["api_base"] = SMART_MODEL_API_BASE
+    if SMART_MODEL_API_KEY:
+        kwargs["api_key"] = SMART_MODEL_API_KEY
+
+    try:
+        response = litellm.completion(**kwargs)
+        text = response.choices[0].message.content.strip()
+        import re
+        text = re.sub(r'^```(?:json)?\s*', '', text)
+        text = re.sub(r'\s*```$', '', text)
+        questions = json.loads(text)
+        if isinstance(questions, list) and all(isinstance(q, str) for q in questions):
+            print(f"[QUIZ] Generated {len(questions)} questions")
+            return questions[:n]
+        raise ValueError(f"Unexpected response shape: {type(questions)}")
+    except Exception as e:
+        print(f"[QUIZ] LLM generation failed: {e}; falling back to key_points")
+        traceback.print_exc()
+        # Fallback: convert first key_point of each block into a question form
+        fallback = []
+        for b in blocks_delivered[:n]:
+            kp = b.get("key_points", [])
+            if kp:
+                first = kp[0].rstrip(".!? ")
+                fallback.append(f"Расскажи коротко про: {first}.")
+        return fallback[:n]
+
+
+def _safe_filename(s: str, fallback: str = "lecture") -> str:
+    """Sanitize a topic string for use in a filename."""
+    import re as _re
+    out = _re.sub(r"[^\wа-яА-ЯёЁ\- ]+", "", str(s or "")).strip().replace(" ", "_")
+    return out[:80] or fallback
+
+
+def _condense_blocks(blocks_with_spoken: list) -> dict:
+    """One SMART_MODEL call: returns {block_id: condensed_paragraph}. Empty on failure."""
+    if not blocks_with_spoken:
+        return {}
+    items = []
+    for entry in blocks_with_spoken:
+        block = entry["block"]
+        items.append({
+            "id": block.get("id"),
+            "key_points": block.get("key_points", []),
+            "spoken": (entry.get("spoken") or "")[:1200],
+        })
+    prompt = (
+        "Для каждого блока лекции составь краткий конспект (2-4 предложения) "
+        "для повторения студентом. Используй и ключевые тезисы, и фактически "
+        "прозвучавший текст. Отвечай строго JSON-массивом "
+        "[{\"id\": ..., \"condensed\": \"...\"}], без markdown.\n\n"
+        f"Блоки: {json.dumps(items, ensure_ascii=False)}"
+    )
+    kwargs = {
+        "model": SMART_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1500,
+        "temperature": 0.3,
+    }
+    if SMART_MODEL_API_BASE:
+        kwargs["api_base"] = SMART_MODEL_API_BASE
+    if SMART_MODEL_API_KEY:
+        kwargs["api_key"] = SMART_MODEL_API_KEY
+    try:
+        response = litellm.completion(**kwargs)
+        text = response.choices[0].message.content.strip()
+        import re as _re
+        text = _re.sub(r"^```(?:json)?\s*", "", text)
+        text = _re.sub(r"\s*```$", "", text)
+        data = json.loads(text)
+        out = {}
+        if isinstance(data, list):
+            for item in data:
+                bid = item.get("id")
+                cond = item.get("condensed", "")
+                if bid is not None and cond:
+                    out[bid] = str(cond)
+        return out
+    except Exception as e:
+        print(f"[LECTURE-SUMMARY] LLM condense failed: {e}")
+        traceback.print_exc()
+        return {}
+
+
+def export_lecture_summary(
+    delivery: "LectureDelivery",
+    ctx_chat_snapshot: list,
+    quiz_questions: list,
+    out_dir: str = "data/lecture_summaries",
+) -> str:
+    """Generate a human-readable .md note from a finished lecture's skeleton + transcript.
+
+    - Walks `delivery.blocks_delivered` in order.
+    - Maps each block to the agent's spoken text by consuming successive
+      `self=True` entries from `ctx_chat_snapshot`. Each block consumes one
+      record (the consolidated "spoken_text" saved by _lecture_step).
+    - Calls SMART_MODEL once with all (key_points, spoken) pairs to produce
+      condensed 2-4 sentence paragraphs. Falls back to raw spoken if LLM fails.
+    - Captures Q&A entries (saved as "[вопрос: X] Y") and the quiz question list.
+
+    Returns the absolute path to the written .md file.
+    """
+    blocks = list(delivery.blocks_delivered or [])
+    topic = (delivery.topic or "лекция").strip()
+    ts = time.strftime("%Y-%m-%d_%H-%M-%S")
+    safe = _safe_filename(topic)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.abspath(os.path.join(out_dir, f"lecture_{safe}_{ts}.md"))
+
+    # Walk ctx_chat: agent (self=True) messages → blocks (in order).
+    # Q&A entries are tagged in history with "[вопрос:" prefix.
+    spoken_for_block = {}   # block_id → str
+    qa_entries = []         # list[str] (already in "[вопрос: ...] ..." form)
+    block_idx = 0
+    for record in ctx_chat_snapshot:
+        if not isinstance(record, dict):
+            continue
+        if not record.get("self"):
+            continue
+        msg = (record.get("msg") or "").strip()
+        if not msg:
+            continue
+        if msg.startswith("[вопрос:") or "[вопрос:" in msg[:20]:
+            qa_entries.append(msg)
+            continue
+        if block_idx < len(blocks):
+            bid = blocks[block_idx].get("id", block_idx)
+            # Concatenate if a block was split across multiple saves
+            prev = spoken_for_block.get(bid, "")
+            spoken_for_block[bid] = (prev + " " + msg).strip() if prev else msg
+            block_idx += 1
+
+    # Condense via SMART_MODEL (best effort, non-fatal).
+    blocks_with_spoken = [
+        {"block": b, "spoken": spoken_for_block.get(b.get("id"), "")}
+        for b in blocks
+    ]
+    condensed = _condense_blocks(blocks_with_spoken)
+
+    # Build markdown.
+    lines = []
+    lines.append(f"# Лекция: {topic}")
+    lines.append("")
+    lines.append(f"*Дата:* {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"*Блоков:* {len(blocks)}")
+    lines.append("")
+
+    for i, b in enumerate(blocks, 1):
+        bid = b.get("id", i)
+        btype = b.get("type", "")
+        kp = b.get("key_points") or []
+        title = kp[0] if kp else f"Блок {i}"
+        lines.append(f"## Блок {i} — {btype}: {title}")
+        if kp:
+            lines.append("")
+            lines.append("**Ключевые тезисы:**")
+            for p in kp:
+                lines.append(f"- {p}")
+        spoken = spoken_for_block.get(bid, "").strip()
+        if spoken:
+            lines.append("")
+            lines.append("**Прозвучало:**")
+            lines.append("")
+            for ln in spoken.splitlines() or [spoken]:
+                lines.append(f"> {ln}")
+        cond = condensed.get(bid)
+        if cond:
+            lines.append("")
+            lines.append("**Краткий конспект:**")
+            lines.append("")
+            lines.append(cond)
+        lines.append("")
+
+    if qa_entries:
+        lines.append("## Свободные вопросы (Q&A)")
+        lines.append("")
+        for q in qa_entries:
+            lines.append(f"- {q}")
+        lines.append("")
+
+    if quiz_questions:
+        lines.append("## Проверочные вопросы")
+        lines.append("")
+        for j, q in enumerate(quiz_questions, 1):
+            if isinstance(q, dict):
+                q = q.get("q") or str(q)
+            lines.append(f"{j}. {q}")
+        lines.append("")
+
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"[LECTURE-SUMMARY] Written: {out_path}")
+    return out_path
 
 
 # Style instruction map for delivery prompts
