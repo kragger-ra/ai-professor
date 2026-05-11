@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 SUMMARIES_DIR = Path("resources/RAG/lecture_summaries")
 
 CHUNK_SUMMARY_PROMPT = """\
-Ты — конспектист лекции по созданию ИИ-персонажей (PersonaLab Workshop).
+Ты — конспектист лекции по курсу {COURSE_NAME} (тема: {COURSE_TOPIC}).
 Выдели из фрагмента лекции:
 1. Ключевые концепции и определения
 2. Практические инструкции и команды
@@ -72,7 +72,12 @@ class LectureSummarizer:
         partial_summaries: list[str] = []
         for i, chunk in enumerate(chunks):
             logger.info("Summarizing chunk %d/%d...", i + 1, len(chunks))
-            prompt = CHUNK_SUMMARY_PROMPT.format(chunk=chunk)
+            try:
+                from lecture import course_config
+                _tmpl = course_config.get_current().render(CHUNK_SUMMARY_PROMPT)
+            except Exception:
+                _tmpl = CHUNK_SUMMARY_PROMPT
+            prompt = _tmpl.format(chunk=chunk)
             try:
                 response = completion(
                     model=self.model,

@@ -41,13 +41,13 @@ _USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "y
 _TRIGGER_INSTRUCTION = (
     "\n\nОБЯЗАТЕЛЬНО: Начинай КАЖДЫЙ ответ со слова TRIGGER_START — без исключений.\n"
     "Всё до TRIGGER_START не будет показано студенту.\n"
-    "Пример: TRIGGER_START Нейронная сеть — это вычислительная модель. (thoughtful)"
+    "Пример: TRIGGER_START Нейронная сеть — это вычислительная модель."
     if _USE_LOCAL_LLM else ""
 )
 
 PROFESSOR_GOAL = f"""Ты — {SELF_NAME}. МУЖЧИНА. Мужской род (сказал, объяснил, готов).
 {PROFESSOR_VOICE_RULES}
-Русский язык. Тег настроения в конце реплики: (neutral) (happy) (thoughtful) (encouraging).
+Русский язык. Не вставляй теги настроения в скобках — TTS их озвучивает.
 Не повторяй слова студента. Не пересказывай вопрос. Сразу отвечай по сути.
 ЗАПРЕЩЕНО начинать ответ с "Добрый день", "Привет", "Здравствуйте" — если в чате уже было приветствие. Сразу к делу.
 {_TRIGGER_INSTRUCTION}
@@ -68,6 +68,12 @@ def construct_prompt(
     personality_key = ctx_swarm["states"].get("personality", "professor_default")
     personality_file = "personalities_professor" if "professor" in personality_key else "personalities"
     system_template = prompt_load(personality_file, personality_key)
+    # Substitute {COURSE_*} placeholders with the active course config.
+    try:
+        from lecture import course_config
+        system_template = course_config.get_current().render(system_template)
+    except Exception:
+        pass
 
     # Annotate RAG context based on confidence (L2 distance: lower = better)
     if rag_context:
