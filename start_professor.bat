@@ -20,13 +20,13 @@ echo       Waiting for TTS...
 timeout /t 10 /nobreak >nul
 
 echo [3/3] Starting AI Professor (args: %*)...
-start "" /MIN python src\main.py %*
+start "" /MIN .venv\Scripts\python.exe src\main.py %*
 echo       Waiting for Gradio...
 timeout /t 15 /nobreak >nul
 
 echo.
 echo Configuring audio routing...
-python -c "import sys; sys.path.insert(0,chr(39)+chr(115)+chr(114)+chr(99)+chr(39)); from utils.voicemeeter_control import meeting_mode; print(meeting_mode())"
+.venv\Scripts\python.exe -c "import sys; sys.path.insert(0,chr(39)+chr(115)+chr(114)+chr(99)+chr(39)); from utils.voicemeeter_control import meeting_mode; print(meeting_mode())"
 
 echo.
 echo ========================================

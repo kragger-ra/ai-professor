@@ -20,7 +20,6 @@ if __name__ == "__main__":
 
 
 from config_schema.general import get_secret  # noqa: E402
-from data_flow.filter_mistral import MistralFilter  # noqa: E402
 
 
 class FilterDummy:

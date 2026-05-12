@@ -15,7 +15,6 @@ dependencies = [
     "langchain-text-splitters~=0.3.11",
     "librosa~=0.11.0",
     "onnxruntime~=1.23.1",
-    "mistralai~=1.9.11",
     "mss~=10.1.0",
     "dotenv~=0.9.9",
     "pip~=25.2",
@@ -24,6 +23,8 @@ dependencies = [
     "python-socketio~=5.14.2",
     "setuptools==80.0.0",
     "soundcard~=0.4.5",
+    "sounddevice~=0.5.1",
+    "voicemeeter-api~=2.6",
     "typing-extensions~=4.15.0",
     "websocket-client~=1.9.0",
     "websockets~=15.0.1",
@@ -33,7 +34,8 @@ dependencies = [
 dev = [
     "black~=25.9.0",
     "isort~=7.0.0",
-    "mkdocs",
+    "pytest~=8.3",
+    "pytest-bdd~=8.1",
 ]
 simpletts = [
     "edge-tts~=6.1.9",
