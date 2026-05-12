@@ -1765,11 +1765,64 @@ class CoreAgent(BaseAgent):
             traceback.print_exc()
             time.sleep(10)
 
+    def _play_startup_greeting(self):
+        """Speak a startup greeting once TTS/STT are up.
+
+        Asks the student to introduce themselves only on first launch
+        (empty profile DB); on subsequent launches just greets and stays
+        ready. Pre-greeting STT noise is dropped so it can't latch as a
+        student name.
+        """
+        has_profiles = False
+        try:
+            if self._profile_mgr:
+                has_profiles = self._profile_mgr.has_any_student()
+        except Exception as e:
+            _agent_log(f"[GREETING] profile check failed: {e}")
+
+        if has_profiles:
+            text = (
+                "Здравствуй, я ИИ-профессор. Готов помочь тебе с учёбой. "
+                "Скажи, какой курс хочешь изучать."
+            )
+        else:
+            text = (
+                "Здравствуй, я ИИ-профессор, готов помочь тебе с учёбой. "
+                "Пожалуйста, представься, назови своё имя."
+            )
+
+        _agent_log(f"[GREETING] has_profiles={has_profiles}, speaking greeting")
+        self._send_to_tts(text)
+
+        # Wait until the TTS queue drains so anything the student says
+        # after the greeting starts a clean turn.
+        deadline = time.time() + 60
+        tts_queue = self.ctx_swarm.get("tts_queue")
+        while time.time() < deadline:
+            try:
+                if len(tts_queue) == 0:
+                    time.sleep(0.6)  # grace for final playback latency
+                    if len(tts_queue) == 0:
+                        break
+            except Exception:
+                break
+            time.sleep(0.2)
+
+        # Drop any STT-captured words that landed BEFORE the greeting finished —
+        # they should not be parsed as the student's name by extract_student_info.
+        try:
+            with self.ctx_swarm["ctx_chat_lock"]:
+                del self.ctx_swarm["ctx_chat"][:]
+            _agent_log("[GREETING] pre-greeting ctx_chat flushed")
+        except Exception as e:
+            _agent_log(f"[GREETING] ctx_chat flush failed: {e}")
+
     def run(self):
         """Main agent loop"""
         _agent_log("[AGENT] === Agent run() started ===")
         self.running = True
         self.ctx_swarm["fx_queue"].put("starting")
+        self._play_startup_greeting()
         while self.ctx_swarm["env"]["actived"] and self.running:
             self.step()
 

@@ -54,6 +54,11 @@ class StudentProfileManager:
         """)
         self.conn.commit()
 
+    def has_any_student(self) -> bool:
+        """True if at least one student profile exists. Used by startup greeting."""
+        row = self.conn.execute("SELECT 1 FROM students LIMIT 1").fetchone()
+        return row is not None
+
     def get_or_create_student(self, name: str) -> dict:
         row = self.conn.execute(
             "SELECT * FROM students WHERE LOWER(name) = LOWER(?)", (name,)
