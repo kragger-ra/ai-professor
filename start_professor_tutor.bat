@@ -15,7 +15,7 @@ if errorlevel 1 (
 )
 
 echo [2/2] Starting AI Professor Tutor (args: %*)...
-start "AI Professor Tutor" /MIN python src\main.py %*
+start "AI Professor Tutor" /MIN .venv\Scripts\python.exe src\main.py %*
 echo       Waiting for Gradio...
 timeout /t 15 /nobreak >nul
 
