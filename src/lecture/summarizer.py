@@ -14,9 +14,26 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from litellm import completion
+import requests
 
 logger = logging.getLogger(__name__)
+
+_LM_STUDIO_BASE = os.getenv("LM_STUDIO_API_BASE", "http://127.0.0.1:22227/v1").rstrip("/")
+_LM_STUDIO_MODEL_DEFAULT = os.getenv("LM_STUDIO_MODEL_NAME", "google/gemma-4-e4b-it")
+
+
+def _lm_studio_complete(model: str, prompt: str, max_tokens: int) -> str:
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "stream": False,
+        "reasoning_effort": "none",
+    }
+    r = requests.post(f"{_LM_STUDIO_BASE}/chat/completions", json=body, timeout=180)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
+
 
 SUMMARIES_DIR = Path("resources/RAG/lecture_summaries")
 
@@ -62,7 +79,7 @@ class LectureSummarizer:
         summaries_dir: Path | str = SUMMARIES_DIR,
         max_tokens: int = 2048,
     ):
-        self.model = model or os.getenv("CORE_LLM_MODEL_NAME", "mistral/pixtral-large-latest")
+        self.model = model or _LM_STUDIO_MODEL_DEFAULT
         self.summaries_dir = Path(summaries_dir)
         self.summaries_dir.mkdir(parents=True, exist_ok=True)
         self.max_tokens = max_tokens
@@ -79,12 +96,7 @@ class LectureSummarizer:
                 _tmpl = CHUNK_SUMMARY_PROMPT
             prompt = _tmpl.format(chunk=chunk)
             try:
-                response = completion(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=self.max_tokens,
-                )
-                summary = response.choices[0].message.content.strip()
+                summary = _lm_studio_complete(self.model, prompt, self.max_tokens)
                 partial_summaries.append(summary)
             except Exception:
                 logger.exception("Failed to summarize chunk %d", i + 1)
@@ -108,12 +120,7 @@ class LectureSummarizer:
             summaries=combined,
         )
         try:
-            response = completion(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=self.max_tokens * 2,
-            )
-            return response.choices[0].message.content.strip()
+            return _lm_studio_complete(self.model, prompt, self.max_tokens * 2)
         except Exception:
             logger.exception("Failed to merge summaries")
             return combined

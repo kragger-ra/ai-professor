@@ -1,21 +1,43 @@
 """Lecture delivery module: chunk-based lecture with adaptive pauses.
 
-Prepares a lecture plan via Claude Opus, then delivers blocks one by one
-through Mistral → SentenceBuffer → TTS, pausing between blocks to listen
+Prepares a lecture plan via LM Studio (Gemma), then delivers blocks one by one
+through SentenceBuffer → TTS, pausing between blocks to listen
 for student questions or backchannels.
 """
 
 import json
 import os
+import re
 import time
 import traceback
 from typing import Optional
 
-import litellm
+import requests
 
-SMART_MODEL = os.getenv("SMART_LLM_MODEL_NAME", "anthropic/claude-opus-4-5")
-SMART_MODEL_API_BASE = os.getenv("SMART_LLM_API_BASE", "")
-SMART_MODEL_API_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+_LM_STUDIO_BASE = os.getenv("LM_STUDIO_API_BASE", "http://127.0.0.1:22227/v1").rstrip("/")
+_LM_STUDIO_MODEL = os.getenv("LM_STUDIO_MODEL_NAME", "google/gemma-4-e4b-it")
+
+
+def _lm_studio_completion(prompt: str, max_tokens: int, temperature: float) -> str:
+    """Non-streaming chat completion against LM Studio. Returns raw assistant text."""
+    body = {
+        "model": _LM_STUDIO_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False,
+        "reasoning_effort": "none",
+    }
+    r = requests.post(f"{_LM_STUDIO_BASE}/chat/completions", json=body, timeout=120)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"]
+
+
+def _strip_md_fences(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return text
 
 DELIVERY_SYSTEM_PROMPT = (
     "Ты ведёшь индивидуальное занятие с одним студентом. Говори голосом, "
@@ -71,24 +93,8 @@ def prepare_lecture(topic: str, rag_context: str, duration_min: int = 30) -> dic
 
 Ответь ТОЛЬКО JSON, без markdown."""
 
-    kwargs = {
-        "model": SMART_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 4000,
-        "temperature": 0.5,
-    }
-    if SMART_MODEL_API_BASE:
-        kwargs["api_base"] = SMART_MODEL_API_BASE
-    if SMART_MODEL_API_KEY:
-        kwargs["api_key"] = SMART_MODEL_API_KEY
-
-    response = litellm.completion(**kwargs)
-    text = response.choices[0].message.content.strip()
-    # Strip markdown fences if present
-    import re
-    text = re.sub(r'^```json\s*', '', text)
-    text = re.sub(r'\s*```$', '', text)
-    plan = json.loads(text)
+    text = _lm_studio_completion(prompt, max_tokens=4000, temperature=0.5)
+    plan = json.loads(_strip_md_fences(text))
     print(f"[LECTURE] Plan generated: {len(plan.get('blocks', []))} blocks, "
           f"topic='{plan.get('topic', topic)}'")
     return plan
@@ -121,24 +127,9 @@ def generate_quiz_questions(blocks_delivered: list, n: int = 3, topic: str = "")
 
 Ответь ТОЛЬКО JSON-списком из {n} строк, без markdown. Пример: ["Вопрос 1?", "Вопрос 2?", "Вопрос 3?"]"""
 
-    kwargs = {
-        "model": SMART_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 600,
-        "temperature": 0.4,
-    }
-    if SMART_MODEL_API_BASE:
-        kwargs["api_base"] = SMART_MODEL_API_BASE
-    if SMART_MODEL_API_KEY:
-        kwargs["api_key"] = SMART_MODEL_API_KEY
-
     try:
-        response = litellm.completion(**kwargs)
-        text = response.choices[0].message.content.strip()
-        import re
-        text = re.sub(r'^```(?:json)?\s*', '', text)
-        text = re.sub(r'\s*```$', '', text)
-        questions = json.loads(text)
+        text = _lm_studio_completion(prompt, max_tokens=600, temperature=0.4)
+        questions = json.loads(_strip_md_fences(text))
         if isinstance(questions, list) and all(isinstance(q, str) for q in questions):
             print(f"[QUIZ] Generated {len(questions)} questions")
             return questions[:n]

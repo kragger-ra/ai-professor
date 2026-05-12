@@ -14,27 +14,25 @@ import re
 import traceback
 from typing import Optional
 
-import litellm
+import requests
 
-SMART_MODEL = os.getenv("SMART_LLM_MODEL_NAME", "anthropic/claude-opus-4-5")
-SMART_MODEL_API_BASE = os.getenv("SMART_LLM_API_BASE", "")
-SMART_MODEL_API_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+_LM_STUDIO_BASE = os.getenv("LM_STUDIO_API_BASE", "http://127.0.0.1:22227/v1").rstrip("/")
+_LM_STUDIO_MODEL = os.getenv("LM_STUDIO_MODEL_NAME", "google/gemma-4-e4b-it")
 
 
 def _smart_call(prompt: str, max_tokens: int = 600, temperature: float = 0.3) -> str:
-    """Single SMART_MODEL completion. Returns raw text or raises."""
-    kwargs = {
-        "model": SMART_MODEL,
+    """Single LM Studio completion (non-streaming). Returns raw text or raises."""
+    body = {
+        "model": _LM_STUDIO_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "stream": False,
+        "reasoning_effort": "none",
     }
-    if SMART_MODEL_API_BASE:
-        kwargs["api_base"] = SMART_MODEL_API_BASE
-    if SMART_MODEL_API_KEY:
-        kwargs["api_key"] = SMART_MODEL_API_KEY
-    response = litellm.completion(**kwargs)
-    return response.choices[0].message.content.strip()
+    r = requests.post(f"{_LM_STUDIO_BASE}/chat/completions", json=body, timeout=120)
+    r.raise_for_status()
+    return r.json()["choices"][0]["message"]["content"].strip()
 
 
 def _extract_json(text: str):
