@@ -1130,13 +1130,24 @@ class CoreAgent(BaseAgent):
         self.stop_lecture()
 
     # --- Tutor-only voice commands -----------------------------------------
+    # Long form: "загрузи предмет X из папки Y" — explicit path
     _LOAD_SUBJECT_RE = re.compile(
         r"(?P<verb>загрузи|подгрузи|добавь)\s+"
-        r"(?:предмет|курс|тему|дисциплину)\s+"
+        r"(?:предмет|курс|тему|дисциплину|модуль)\s+"
         r"(?P<name>.+?)\s+"
         r"из\s+(?:папки\s+)?(?P<path>.+?)\s*$",
         re.IGNORECASE,
     )
+    # Short form: "загрузи курс X" — resolved via course directory scan
+    _LOAD_SUBJECT_SHORT_RE = re.compile(
+        r"(?P<verb>загрузи|подгрузи|добавь)\s+"
+        r"(?:предмет|курс|тему|дисциплину|модуль)\s+"
+        r"(?P<name>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    # Directories scanned for pre-packaged courses (relative to repo root).
+    # Each subdir is a course package if it contains course_config.yml.
+    _COURSE_SEARCH_DIRS = ("courses", "samples", "data/courses")
 
     _TOPIC_LECTURE_RE = re.compile(
         r"(?:расскажи(?:\s+мне)?(?:\s+(?:про|о|об))?|объясни(?:\s+мне)?(?:\s+(?:про|о|об))?|"
@@ -1238,16 +1249,95 @@ class CoreAgent(BaseAgent):
         self._save_to_history(phrase)
         return True
 
+    def _scan_known_courses(self) -> dict:
+        """Scan _COURSE_SEARCH_DIRS for course packages.
+
+        Returns {short_name_lower: abs_path}. A package is any subdir with
+        course_config.yml; key is short_name (or name) from that YAML.
+        """
+        try:
+            import yaml as _yaml  # type: ignore
+        except ImportError:
+            _agent_log("[TUTOR] PyYAML missing; cannot scan course directories")
+            return {}
+        found = {}
+        for base in self._COURSE_SEARCH_DIRS:
+            if not os.path.isdir(base):
+                continue
+            for entry in os.listdir(base):
+                pkg_path = os.path.join(base, entry)
+                cfg_path = os.path.join(pkg_path, "course_config.yml")
+                if not os.path.isfile(cfg_path):
+                    continue
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg = _yaml.safe_load(f) or {}
+                except Exception as e:
+                    _agent_log(f"[TUTOR] Failed to read {cfg_path}: {e}")
+                    continue
+                course = cfg.get("course") or cfg
+                short = (course.get("short_name") or course.get("name") or entry).strip().lower()
+                if short not in found:
+                    found[short] = os.path.abspath(pkg_path)
+                # Also index by directory name for fallback
+                dirkey = entry.strip().lower()
+                if dirkey not in found:
+                    found[dirkey] = os.path.abspath(pkg_path)
+        return found
+
+    def _resolve_course_by_name(self, name: str) -> str | None:
+        """Find a known course matching the spoken name (case-insensitive)."""
+        known = self._scan_known_courses()
+        if not known:
+            return None
+        target = name.strip().lower()
+        if target in known:
+            return known[target]
+        # Substring fallback: "вышмат" should match "вышмат-2026"
+        for key, path in known.items():
+            if target in key or key in target:
+                return path
+        return None
+
     def _handle_tutor_load_subject(self, msg: str) -> bool:
-        """Detect 'загрузи предмет X из папки Y' and reload RAG. Returns True if handled."""
+        """Detect load-course commands and reload RAG. Returns True if handled.
+
+        Two forms:
+          1. "загрузи предмет X из папки Y" — explicit path
+          2. "загрузи курс X" — resolved by scanning courses/, samples/, data/courses/
+        """
         if self._lecture_phase != "idle" or not msg:
             return False
-        m = self._LOAD_SUBJECT_RE.search(msg.strip())
-        if not m:
-            return False
-        name = m.group("name").strip().rstrip(".!?,")
-        path = m.group("path").strip().rstrip(".!?,")
-        verb = m.group("verb").lower()
+        stripped = msg.strip()
+        # Try long form first (explicit path takes precedence)
+        m = self._LOAD_SUBJECT_RE.search(stripped)
+        if m:
+            name = m.group("name").strip().rstrip(".!?,")
+            path = m.group("path").strip().rstrip(".!?,")
+            verb = m.group("verb").lower()
+        else:
+            # Short form: resolve via known-courses scan
+            m = self._LOAD_SUBJECT_SHORT_RE.search(stripped)
+            if not m:
+                return False
+            name = m.group("name").strip().rstrip(".!?,")
+            verb = m.group("verb").lower()
+            resolved = self._resolve_course_by_name(name)
+            if resolved is None:
+                known = self._scan_known_courses()
+                if known:
+                    options = ", ".join(sorted(set(known.keys()))[:5])
+                    self._send_to_tts(
+                        f"Не нашёл курс {name}. Доступны: {options}."
+                    )
+                else:
+                    self._send_to_tts(
+                        f"Не нашёл курс {name}. Положи папку курса в courses или samples."
+                    )
+                _agent_log(f"[TUTOR] Short load: name='{name}' not resolved")
+                return True
+            path = resolved
+            _agent_log(f"[TUTOR] Short load resolved: name='{name}' → '{path}'")
         mode = "append" if verb == "добавь" else "replace"
         _agent_log(f"[TUTOR] Load subject: name='{name}', path='{path}', mode='{mode}'")
         self._send_to_tts(f"Загружаю предмет {name}, минуту.")
