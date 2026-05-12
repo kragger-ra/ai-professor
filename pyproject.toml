@@ -40,6 +40,10 @@ simpletts = [
     "edge-tts~=6.1.9",
     "vosk-tts~=0.3.61",
     "scipy~=1.15.3",
+    "fastapi~=0.115",
+    "uvicorn~=0.32",
+    "stressrnn",
+    "num2words~=0.5",
 ]
 stt = [
     "faster-whisper~=1.2.0",
@@ -53,3 +57,6 @@ ai-professor-tutor = "main:main"
 [tool.uv]
 package = true
 default-groups = ["dev", "stt"]
+
+[tool.uv.sources]
+stressrnn = { git = "https://github.com/Desklop/StressRNN.git" }

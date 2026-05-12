@@ -1,0 +1,27 @@
+# Stress / pronunciation overrides — win against StressRNN.
+#
+# Two formats:
+#   word_with_plus                 # stress-only fix; input form = same word w/o `+`
+#   input_word => output_with_plus # spelling + stress fix (e.g. е→э for phonetics)
+#
+# Matching is case-insensitive; first-letter capitalisation is preserved.
+# Vosk convention: + BEFORE the stressed vowel.
+# Applied after StressRNN + V+→+V conversion, before Latin transliteration.
+# Add lines here as wrong stresses are caught during listening.
+
+ассистент => ассист+энт
+входн+ых
+голосов+ым
+модели => мод+эли
+тог+о
+пом+очь
+диал+огового
+масштаб+ировать
+берет => бер+ёт
+вес+ов
+эмб+едингов
+майнкр+афт
+самог+о
+языков+ым
+датасет => датас+эт
+углуб+имся

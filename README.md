@@ -37,7 +37,7 @@
 
 ## Быстрый старт
 
-См. [STUDENT_QUICKSTART.md](STUDENT_QUICKSTART.md) — установка LM Studio, Vosk TTS, питон-зависимостей, `.env`, запуск.
+См. [STUDENT_QUICKSTART.md](STUDENT_QUICKSTART.md) — установка LM Studio + моделей (Gemma + bge-m3), питон-зависимостей, `.env`, запуск. Vosk TTS сервер встроен в репо (`vosk_tts_server/`), отдельно ставить не нужно.
 
 Подготовка своего курса (RAG-пакета) — [docs/RAG_PACKAGE_GUIDE.md](docs/RAG_PACKAGE_GUIDE.md).
 

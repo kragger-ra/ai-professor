@@ -39,13 +39,14 @@ Gemma 3 E4B — основной LLM. Работает офлайн, без об
    - **Context length:** `4096`
    - **GPU offload:** Max
    - **Port:** `22227` (важно — порт зашит в `.env.example`)
-5. Нажми **Start Server** — должен появиться `http://localhost:22227/v1` в статусе
+5. Также скачай через **Discover** модель эмбеддингов `text-embedding-bge-m3` (квант любой, ~600 МБ). Она нужна для RAG.
+6. Нажми **Start Server** — должен появиться `http://localhost:22227/v1` в статусе
 
 Проверка:
 ```powershell
 curl http://localhost:22227/v1/models
 ```
-Должен вернуть JSON с моделью `google/gemma-4-e4b`.
+Должен вернуть JSON с двумя моделями: `google/gemma-4-e4b` и `text-embedding-bge-m3`.
 
 > Подробности по моделям, замеры VRAM, альтернативные кванты — `docs/LM_STUDIO_SETUP.md`.
 
@@ -53,16 +54,15 @@ curl http://localhost:22227/v1/models
 
 ## 3. Vosk TTS сервер
 
-Tutor использует Vosk TTS для русского голоса (с автоударениями).
+Vosk TTS сервер **встроен в репозиторий** (`vosk_tts_server/`). Отдельно ничего ставить не нужно — bat-скрипт стартует его автоматически через тот же venv.
 
-1. Установи Vosk TTS отдельно: https://github.com/alphacep/vosk-tts (или используй готовую сборку, если выдана)
-2. Запусти сервер на порту `22232` (имя процесса должно содержать `hVostic TTS` — bat-скрипт это проверяет)
-3. Проверка:
-   ```powershell
-   curl http://localhost:22232/
-   ```
+При первом запуске библиотека `vosk_tts` скачает модель `vosk-model-tts-ru-0.9-multi` (~150 МБ). Это разовое действие, потом запускается мгновенно.
 
-> Если у тебя нет готовой сборки Vosk TTS — обратись к организатору апробации, отдельный README по сборке Vosk лежит в `N:\exam\hVostic TTS\README.md` (у Корректора).
+Проверка после запуска (выполнить пока bat работает):
+```powershell
+curl http://localhost:22232/health
+```
+Должен вернуть `{"status":"ok",...}`.
 
 ---
 
