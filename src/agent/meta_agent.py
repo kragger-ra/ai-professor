@@ -126,12 +126,12 @@ def analyze_context(student_profile: str, last_messages: List[str],
     if result is None and _META_BACKEND in ("cloud", "auto") or (_META_BACKEND == "local" and result is None and os.getenv("META_CLOUD_FALLBACK")):
         try:
             response = litellm.completion(
-                model="openai/claude-haiku-4.5",
+                model=os.getenv("META_CLOUD_MODEL", "anthropic/claude-haiku-4-5"),
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
                 temperature=0.3,
-                api_base="https://api.awstore.cloud/v1",
-                api_key=os.getenv("OPENAI_API_KEY"),
+                api_base=os.getenv("META_CLOUD_API_BASE") or None,
+                api_key=os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY"),
             )
             text = response.choices[0].message.content.strip()
             result = _extract_json(text)

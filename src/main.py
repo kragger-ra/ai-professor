@@ -591,9 +591,9 @@ with demo:
                 "base":  "",
                 "key":   "",
             },
-            "OpenAI / AWS (Claude)": {
-                "model": "openai/claude-opus-4.6",
-                "base":  "https://api.awstore.cloud/v1",
+            "Anthropic (Claude)": {
+                "model": "anthropic/claude-opus-4-5",
+                "base":  "",
                 "key":   "",
             },
             "OpenRouter": {
