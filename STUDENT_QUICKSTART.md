@@ -68,22 +68,49 @@ Tutor использует Vosk TTS для русского голоса (с а�
 
 ## 4. Python-окружение и зависимости
 
-```powershell
-# Создать venv
-python -m venv venv
-venv\Scripts\activate
+Проект использует `uv` — быстрый менеджер пакетов от Astral. Он автоматически создаёт `.venv/`, читает `pyproject.toml` и устанавливает зависимости из всех групп одной командой.
 
-# Установить проект и зависимости
+### Установить uv (если ещё нет)
+
+```powershell
+# Вариант 1: PowerShell-инсталлер (рекомендуется)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Вариант 2: winget
+winget install --id=astral-sh.uv -e
+
+# Вариант 3: через pip (если установлен Python)
+pip install uv
+```
+
+Проверь установку:
+```powershell
+uv --version   # должно показать uv 0.x.x
+```
+
+### Установить зависимости проекта
+
+```powershell
+uv sync --all-groups
+```
+
+Команда сделает за ~3-5 минут:
+- Скачает Python 3.10.9 в кэш uv (если в системе нет)
+- Создаст `.venv/` в корне проекта
+- Установит `pyproject.toml` deps + группы `dev` / `stt` / `simpletts` / `gpu`
+
+После завершения `.venv\Scripts\python.exe` — это твой venv-Python. Bat-скрипты уже знают про него и используют автоматически.
+
+### Альтернатива через pip (без uv)
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
 pip install -e .
-
-# Дополнительно — TTS, эмбеддинги, BDD
-pip install vosk-tts edge-tts faster-whisper sentence-transformers pytest-bdd
+pip install pytest-bdd faster-whisper vosk-tts edge-tts scipy onnxruntime-gpu
 ```
 
-Если PyTorch требует CUDA-сборку:
-```powershell
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
+GPU-вариант ctranslate2 (для `STT_COMPUTE_DEVICE=cuda`) faster-whisper подтянет автоматически при первом запуске.
 
 ---
 
@@ -106,7 +133,7 @@ copy .env.example .env
 
 Узнать имена аудиоустройств:
 ```powershell
-python -c "import sounddevice as sd; print(sd.query_devices())"
+.venv\Scripts\python.exe -c "import sounddevice as sd; print(sd.query_devices())"
 ```
 
 Скопируй точное имя нужного устройства в `.env` если default не подходит.
@@ -118,7 +145,7 @@ python -c "import sounddevice as sd; print(sd.query_devices())"
 Чтобы тьютор «знал» твой курс, нужно собрать RAG-пакет из своих `.md`/`.txt` файлов:
 
 ```powershell
-python tools\prepare_rag_package.py `
+uv run tools\prepare_rag_package.py `
     --source D:\my_lectures `
     --out D:\courses\linal `
     --course-name "Линейная алгебра" `
@@ -126,6 +153,8 @@ python tools\prepare_rag_package.py `
     --short-name "ЛинАл" `
     --teaching-style "строго"
 ```
+
+> Без uv можно через venv-Python напрямую: `.venv\Scripts\python.exe tools\prepare_rag_package.py ...`
 
 Подробности и примеры — [docs/RAG_PACKAGE_GUIDE.md](docs/RAG_PACKAGE_GUIDE.md).
 

@@ -33,7 +33,7 @@
 ### Минимальный пример
 
 ```powershell
-python tools\prepare_rag_package.py `
+uv run tools\prepare_rag_package.py `
     --source D:\my_lectures `
     --out D:\courses\linal `
     --course-name "Линейная алгебра" `
@@ -43,7 +43,7 @@ python tools\prepare_rag_package.py `
 ### Полный пример с настройкой стиля
 
 ```powershell
-python tools\prepare_rag_package.py `
+uv run tools\prepare_rag_package.py `
     --source D:\raw_kb\linal `
     --out D:\courses\linal `
     --course-name "Линейная алгебра" `
@@ -53,6 +53,8 @@ python tools\prepare_rag_package.py `
     --audience "студент технической специальности" `
     --overwrite
 ```
+
+> Без uv: `.venv\Scripts\python.exe tools\prepare_rag_package.py ...`
 
 ### Параметры
 
