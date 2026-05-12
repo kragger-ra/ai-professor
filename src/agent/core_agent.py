@@ -1163,8 +1163,26 @@ class CoreAgent(BaseAgent):
     _COURSE_SEARCH_DIRS = ("courses", "samples", "data/courses")
 
     _TOPIC_LECTURE_RE = re.compile(
-        r"(?:расскажи(?:\s+мне)?(?:\s+(?:про|о|об))?|объясни(?:\s+мне)?(?:\s+(?:про|о|об))?|"
-        r"хочу\s+изучить|изучим|давай\s+(?:изучим|разберём))\s+(?P<topic>.+?)\s*$",
+        r"(?:"
+        r"расскажи(?:\s+мне)?(?:\s+(?:про|о|об))?"
+        r"|объясни(?:\s+мне)?(?:\s+(?:про|о|об))?"
+        r"|хочу\s+изучить"
+        r"|изучим"
+        r"|давай(?:те)?\s+(?:изучим|разберём|разберем|начнём|начнем|приступим\s+к)"
+        r"|(?:давай(?:те)?\s+)?(?:начнём|начнем|приступим)\s+(?:с(?:о)?|к)"
+        r"|займ[её]мся"
+        r")\s+(?P<topic>.+?)\s*$",
+        re.IGNORECASE,
+    )
+
+    _LIST_COURSES_RE = re.compile(
+        r"(?:"
+        r"какие\s+(?:у\s+(?:тебя|нас|вас)\s+)?курсы"
+        r"|(?:покажи|перечисли|список)\s+(?:доступн\w+\s+)?курс\w+"
+        r"|что\s+(?:у\s+тебя\s+)?(?:есть|загружено)"
+        r"|какие\s+курсы\s+(?:загружены|доступны|есть)"
+        r"|что\s+(?:ты\s+)?(?:умеешь|можешь\s+преподавать)"
+        r")",
         re.IGNORECASE,
     )
 
@@ -1447,6 +1465,32 @@ class CoreAgent(BaseAgent):
         self._send_to_tts(f"Готово, загружено {n} фрагментов. Могу преподавать предмет {name}.")
         return True
 
+    def _handle_list_courses(self, msg: str) -> bool:
+        """Voice command 'какие курсы / список курсов / что ты умеешь'.
+
+        Reads the names of all known course packages aloud — bypasses the
+        LLM so the answer is always factual, not hallucinated. Returns
+        True iff the message matched.
+        """
+        if self._lecture_phase != "idle" or not msg:
+            return False
+        if not self._LIST_COURSES_RE.search(msg.strip()):
+            return False
+        known = self._scan_known_courses()
+        if not known:
+            self._send_to_tts(
+                "У меня пока нет ни одного курса. "
+                "Положи папку курса в courses или samples."
+            )
+            _agent_log("[TUTOR] List courses: empty")
+            return True
+        names = sorted(set(known.keys()))
+        listing = ", ".join(names[:8])
+        more = "" if len(names) <= 8 else f" и ещё {len(names) - 8}"
+        self._send_to_tts(f"Доступные курсы: {listing}{more}.")
+        _agent_log(f"[TUTOR] List courses: {names}")
+        return True
+
     def _handle_tutor_topic_lecture(self, msg: str) -> bool:
         """Detect 'расскажи про X' and start a lecture on that topic. Returns True if handled."""
         if self._lecture_phase != "idle" or not msg:
@@ -1455,6 +1499,10 @@ class CoreAgent(BaseAgent):
         if not m:
             return False
         topic = m.group("topic").strip().rstrip(".!?,")
+        # "Давайте начнём с вышматом" — regex consumed "начнём", but the
+        # following preposition "с / со / к" may leak into topic. Strip it.
+        topic = re.sub(r'^(?:с(?:о)?|к)\s+', '', topic, flags=re.IGNORECASE)
+        topic = topic.strip()
         if len(topic) < 3:
             return False
         _agent_log(f"[TUTOR] Topic lecture request: '{topic}'")
@@ -1612,6 +1660,10 @@ class CoreAgent(BaseAgent):
 
             # 2.5c Tutor: voice command "загрузи предмет X из папки Y"
             if self._handle_tutor_load_subject(last_student_msg):
+                return
+
+            # 2.5c1 Tutor: "какие курсы / список курсов / что ты умеешь"
+            if self._handle_list_courses(last_student_msg):
                 return
 
             # 2.5d Tutor: voice command "расскажи мне про X" (start lecture on topic from RAG)
