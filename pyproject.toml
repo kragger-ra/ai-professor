@@ -1,7 +1,7 @@
 [project]
-name = "nettyan"
+name = "ai-professor-tutor"
 version = "2.0.5"
-description = "NetTyan Prototype"
+description = "AI Professor — voice-based teaching assistant (Tutor build for individual study)"
 readme = "README.md"
 requires-python = ">=3.10.0,<3.11.0"
 dependencies = [
@@ -47,7 +47,7 @@ gpu = [
     "onnxruntime-gpu~=1.23.2"
 ]
 [project.scripts]
-nettyan = "main:main"
+ai-professor-tutor = "main:main"
 
 [tool.uv]
 package = true
