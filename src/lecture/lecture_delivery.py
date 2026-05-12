@@ -13,9 +13,9 @@ from typing import Optional
 
 import litellm
 
-SMART_MODEL = os.getenv("SMART_LLM_MODEL_NAME", "openai/claude-opus-4.6")
-SMART_MODEL_API_BASE = os.getenv("SMART_LLM_API_BASE", "https://api.awstore.cloud/v1")
-SMART_MODEL_API_KEY = os.getenv("OPENAI_API_KEY", "")
+SMART_MODEL = os.getenv("SMART_LLM_MODEL_NAME", "anthropic/claude-opus-4-5")
+SMART_MODEL_API_BASE = os.getenv("SMART_LLM_API_BASE", "")
+SMART_MODEL_API_KEY = os.getenv("ANTHROPIC_API_KEY") or os.getenv("OPENAI_API_KEY", "")
 
 DELIVERY_SYSTEM_PROMPT = (
     "Ты ведёшь индивидуальное занятие с одним студентом. Говори голосом, "
