@@ -315,30 +315,37 @@ with demo:
         stop_agent_btn = gr.Button("Stop", variant="secondary")
         stop_agent_btn.click(fn=activate_agent)
 
-    with gr.Group():
-        gr.Markdown("### Audio Routing (VoiceMeeter)")
-        audio_status = gr.Textbox(value="—", label="Current mode", interactive=False)
-        with gr.Row():
-            meeting_btn = gr.Button("Созвон", variant="primary")
-            local_btn = gr.Button("Локально", variant="secondary")
-            release_btn = gr.Button("Отпустить", variant="stop")
+    # VoiceMeeter UI controls — only visible when AUDIO_MODE selects a routing mode.
+    # Individual student mode (AUDIO_MODE=none) hides this group entirely.
+    if os.getenv("AUDIO_MODE", "none").lower() not in ("none", "off", "skip", ""):
+        with gr.Group():
+            gr.Markdown("### Audio Routing (VoiceMeeter)")
+            audio_status = gr.Textbox(value="—", label="Current mode", interactive=False)
+            with gr.Row():
+                meeting_btn = gr.Button("Созвон", variant="primary")
+                local_btn = gr.Button("Локально", variant="secondary")
+                release_btn = gr.Button("Отпустить", variant="stop")
 
-        from utils.voicemeeter_control import (
-            meeting_mode, local_mode, release_audio, get_status as vm_status,
-        )
+            from utils.voicemeeter_control import (
+                meeting_mode, local_mode, release_audio, get_status as vm_status,
+            )
 
-        meeting_btn.click(fn=meeting_mode, outputs=[audio_status])
-        local_btn.click(fn=local_mode, outputs=[audio_status])
-        release_btn.click(fn=release_audio, outputs=[audio_status])
-        demo.load(fn=vm_status, outputs=[audio_status])
+            meeting_btn.click(fn=meeting_mode, outputs=[audio_status])
+            local_btn.click(fn=local_mode, outputs=[audio_status])
+            release_btn.click(fn=release_audio, outputs=[audio_status])
+            demo.load(fn=vm_status, outputs=[audio_status])
 
     with gr.Group():
         def _exit_all():
-            release_audio()
+            try:
+                from utils.voicemeeter_control import release_audio as _release
+                _release()
+            except Exception:
+                pass
             stop_system()
             return "Exiting..."
 
-        exit_btn = gr.Button("EXIT (Release Audio + Shutdown)", variant="stop")
+        exit_btn = gr.Button("EXIT (Shutdown)", variant="stop")
         exit_btn.click(fn=_exit_all)
     # Lecture mode controls
     with gr.Group():
@@ -833,7 +840,7 @@ def main():
     # AUDIO_MODE=none (or off/skip) to bypass VM entirely — TTS plays direct
     # to the OS default device. Use this for laptop/local tests where VM
     # would grab Sound Blaster in WASAPI exclusive mode.
-    _vm_mode = os.getenv("AUDIO_MODE", "local").lower()
+    _vm_mode = os.getenv("AUDIO_MODE", "none").lower()
     if _vm_mode in ("none", "off", "skip", ""):
         _log_timing("VoiceMeeter skipped (AUDIO_MODE=none)")
     else:
@@ -873,7 +880,7 @@ def main():
         _log_timing("Starting STTProc process")
         from data_collectors.stt.mic_stt_handler import mic_stt_handler
         # In meeting mode, STT listens to Voicemeeter Out B2 (call audio)
-        if os.getenv("AUDIO_MODE", "local").lower() == "meeting":
+        if os.getenv("AUDIO_MODE", "none").lower() == "meeting":
             stt_device_name = "Voicemeeter Out B2"
             print(f"[main.py] MEETING mode: STT listening to {stt_device_name}")
         else:
