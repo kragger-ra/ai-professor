@@ -45,7 +45,6 @@ from lecture.lecture_delivery import (
     DELIVERY_SYSTEM_PROMPT,
 )
 from lecture.quiz_loop import QuizSession
-from agent.humor import try_humor
 from config_schema.general import get_name
 from utils.debug import bcolors
 from data_flow.ctx_handler import CtxHandler
@@ -700,23 +699,6 @@ class CoreAgent(BaseAgent):
 
         spoken_text = " ".join(spoken_sentences).strip()
 
-        # Humor injection in lecture blocks
-        if not interrupted and spoken_text and _lec_sentence_count >= 2:
-            _topic = " ".join(block.get("key_points", [])[:1])[:100] or "лекция"
-            _meta = getattr(self, '_last_meta_result', {}) or {"mood": "спокоен", "request_type": "теория"}
-            _interactions = 5  # lecture = familiar context
-            _with_humor = try_humor(
-                response_text=spoken_text, topic=_topic,
-                meta_result=_meta, student_msg="",
-                student_interactions=_interactions,
-            )
-            if _with_humor != spoken_text:
-                _humor_line = _with_humor.replace(spoken_text, "").strip()
-                if _humor_line:
-                    self._send_to_tts(_humor_line)
-                    spoken_text = _with_humor
-                    _agent_log(f"[HUMOR] Injected in lecture block: '{_humor_line[:60]}'")
-
         if spoken_text:
             self._save_to_history(spoken_text + (" [прервано студентом]" if interrupted else ""))
 
@@ -769,6 +751,16 @@ class CoreAgent(BaseAgent):
     _END_LECTURE_PHRASES = (
         "завершаем пару", "заканчиваем пару", "конец пары", "закончим пару",
         "завершаем занятие", "заканчиваем занятие",
+        "останови лекцию", "останови занятие", "закончи лекцию",
+        "закончи занятие", "прекрати лекцию", "стоп лекция", "стоп лекцию",
+    )
+    # Short single-word end-commands ("хватит", "достаточно", "перестань",
+    # "останови", "закончи", "прекрати") — accepted only when the whole
+    # utterance is short, so a longer aside like "хватит шуток, продолжай"
+    # doesn't accidentally end the lecture.
+    _END_LECTURE_KEYWORDS = (
+        "хватит", "достаточно", "перестань", "прекрати", "останови",
+        "останов", "закончи",
     )
 
     def _handle_lecture_interrupt(self, _override_msg: str = None, _resume_after: bool = True):
@@ -789,7 +781,16 @@ class CoreAgent(BaseAgent):
 
         # End-lecture voice command — overrides everything else
         if msg_lower and any(p in msg_lower for p in self._END_LECTURE_PHRASES):
-            _agent_log("[LECTURE] End-lecture command detected")
+            _agent_log("[LECTURE] End-lecture command detected (phrase)")
+            self._enter_farewell()
+            return
+        # Standalone keyword on a *short* utterance (хватит / останови /
+        # закончи / прекрати …). Word count <= 3 guards against asides like
+        # "хватит шуток, продолжай дальше" or "прекрати говорить про это".
+        if msg_lower and len(msg_lower.split()) <= 3 and any(
+            re.search(rf"\b{kw}\w*\b", msg_lower) for kw in self._END_LECTURE_KEYWORDS
+        ):
+            _agent_log(f"[LECTURE] End-lecture command detected (keyword): '{msg_lower}'")
             self._enter_farewell()
             return
 
@@ -1177,10 +1178,13 @@ class CoreAgent(BaseAgent):
 
     _LIST_COURSES_RE = re.compile(
         r"(?:"
-        r"какие\s+(?:у\s+(?:тебя|нас|вас)\s+)?курсы"
-        r"|(?:покажи|перечисли|список)\s+(?:доступн\w+\s+)?курс\w+"
+        # "какие [у тебя [есть]] курсы / какие курсы [у тебя/доступны/есть/загружены]"
+        r"какие(?:\s+\w+){0,3}\s+курс\w*"
+        # "покажи / перечисли / список [доступных] курсов"
+        r"|(?:покажи|перечисли|список)\s+(?:доступн\w+\s+)?курс\w*"
+        # "что [у тебя] есть / загружено"
         r"|что\s+(?:у\s+тебя\s+)?(?:есть|загружено)"
-        r"|какие\s+курсы\s+(?:загружены|доступны|есть)"
+        # "что [ты] умеешь / можешь преподавать"
         r"|что\s+(?:ты\s+)?(?:умеешь|можешь\s+преподавать)"
         r")",
         re.IGNORECASE,
@@ -1798,32 +1802,6 @@ class CoreAgent(BaseAgent):
 
             elapsed = (time.perf_counter() - t0) * 1000
             spoken_text = " ".join(spoken_sentences).strip()
-
-            # 5. Humor injection (after streaming, before history save)
-            # Disabled for local LLM — humor module duplicates the response
-            if not self._use_local_llm and not interrupted and spoken_text and sentence_count >= 2:
-                _topic = last_student_msg[:100] if last_student_msg else "общая тема"
-                _student_interactions = 0
-                if self._current_student and self._profile_mgr:
-                    try:
-                        _prof = self._profile_mgr.get_or_create_student(self._current_student)
-                        _student_interactions = _prof.get("total_interactions", 0)
-                    except Exception:
-                        pass
-                _meta = getattr(self, '_last_meta_result', {}) or {}
-                _with_humor = try_humor(
-                    response_text=spoken_text,
-                    topic=_topic,
-                    meta_result=_meta,
-                    student_msg=last_student_msg,
-                    student_interactions=_student_interactions,
-                )
-                if _with_humor != spoken_text:
-                    # Extract the injected humor line and send to TTS
-                    _humor_line = _with_humor.replace(spoken_text, "").strip()
-                    if _humor_line:
-                        self._send_to_tts(_humor_line)
-                        spoken_text = _with_humor
 
             if interrupted:
                 print(f"[AGENT] Interrupted after {sentence_count} sentences, "
