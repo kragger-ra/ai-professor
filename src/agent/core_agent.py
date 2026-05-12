@@ -247,6 +247,9 @@ class CoreAgent(BaseAgent):
         self._current_student = None
         self._interrupted = False
         self._greeting_sent = False
+        # Set True after a bare "загрузи курс" without a name; the next
+        # student utterance is interpreted as the course name.
+        self._awaiting_course_name = False
 
         # Silence timer (feature 3)
         self._last_response_time = 0.0
@@ -1130,19 +1133,29 @@ class CoreAgent(BaseAgent):
         self.stop_lecture()
 
     # --- Tutor-only voice commands -----------------------------------------
+    # Verbs that count as "load this course". 'добавь' is the only one that
+    # uses append-mode in reload_from_path; the rest replace.
+    _LOAD_VERBS = r"загрузи|подгрузи|добавь|открой|возьми|включи|начни"
+    _SUBJECT_NOUNS = r"предмет|курс|тему|дисциплину|модуль"
     # Long form: "загрузи предмет X из папки Y" — explicit path
     _LOAD_SUBJECT_RE = re.compile(
-        r"(?P<verb>загрузи|подгрузи|добавь)\s+"
-        r"(?:предмет|курс|тему|дисциплину|модуль)\s+"
+        rf"(?P<verb>{_LOAD_VERBS})\s+"
+        rf"(?:{_SUBJECT_NOUNS})\s+"
         r"(?P<name>.+?)\s+"
         r"из\s+(?:папки\s+)?(?P<path>.+?)\s*$",
         re.IGNORECASE,
     )
     # Short form: "загрузи курс X" — resolved via course directory scan
     _LOAD_SUBJECT_SHORT_RE = re.compile(
-        r"(?P<verb>загрузи|подгрузи|добавь)\s+"
-        r"(?:предмет|курс|тему|дисциплину|модуль)\s+"
+        rf"(?P<verb>{_LOAD_VERBS})\s+"
+        rf"(?:{_SUBJECT_NOUNS})\s+"
         r"(?P<name>.+?)\s*$",
+        re.IGNORECASE,
+    )
+    # Bare form: "загрузи курс" — no name. Triggers a follow-up question
+    # ("какой курс загрузить?") and parks the agent in awaiting-name mode.
+    _LOAD_SUBJECT_BARE_RE = re.compile(
+        rf"(?P<verb>{_LOAD_VERBS})\s+(?:{_SUBJECT_NOUNS})\s*[.!?,]?\s*$",
         re.IGNORECASE,
     )
     # Directories scanned for pre-packaged courses (relative to repo root).
@@ -1286,58 +1299,133 @@ class CoreAgent(BaseAgent):
         return found
 
     def _resolve_course_by_name(self, name: str) -> str | None:
-        """Find a known course matching the spoken name (case-insensitive)."""
+        """Find a known course matching the spoken name (case-insensitive).
+
+        Tries exact -> substring -> fuzzy (difflib) match in that order, so
+        STT distortions like "вашим матом" / "вышмату" still find "вышмат".
+        """
         known = self._scan_known_courses()
         if not known:
             return None
-        target = name.strip().lower()
+        target = name.strip().lower().rstrip(".!?,")
+        # 1. Exact
         if target in known:
             return known[target]
-        # Substring fallback: "вышмат" should match "вышмат-2026"
+        # 2. Substring either way ("вышмат" ↔ "вышмат-2026")
         for key, path in known.items():
             if target in key or key in target:
                 return path
+        # 3. Fuzzy — catches STT mishears. cutoff 0.55 is lenient enough for
+        #    "вашим матом" -> "вышмат" but still rejects unrelated phrases.
+        import difflib
+        close = difflib.get_close_matches(target, list(known.keys()), n=1, cutoff=0.55)
+        if close:
+            _agent_log(f"[TUTOR] fuzzy course match: '{target}' -> '{close[0]}'")
+            return known[close[0]]
+        # 4. Word-by-word fuzzy: STT may pad the name with garbage
+        #    ("займемся вашим матом" -> tokenize, try each word).
+        for token in re.findall(r"\w+", target):
+            if len(token) < 4:
+                continue
+            close = difflib.get_close_matches(token, list(known.keys()), n=1, cutoff=0.7)
+            if close:
+                _agent_log(f"[TUTOR] fuzzy token match: '{token}' -> '{close[0]}'")
+                return known[close[0]]
         return None
 
     def _handle_tutor_load_subject(self, msg: str) -> bool:
         """Detect load-course commands and reload RAG. Returns True if handled.
 
-        Two forms:
+        Three forms:
           1. "загрузи предмет X из папки Y" — explicit path
           2. "загрузи курс X" — resolved by scanning courses/, samples/, data/courses/
+          3. "загрузи курс" (no name) — speaks "какой курс?" and parks the
+             agent in awaiting-name mode; the next utterance is treated as
+             the course name.
         """
         if self._lecture_phase != "idle" or not msg:
             return False
         stripped = msg.strip()
+
+        # Awaiting-name mode: previous turn was a bare "загрузи курс". Treat
+        # this whole utterance as a name and try to resolve. If it does NOT
+        # look like a valid course name (no match), drop out of awaiting-mode
+        # so the student isn't trapped — let the message fall through to the
+        # normal pipeline.
+        if self._awaiting_course_name:
+            self._awaiting_course_name = False
+            cleaned = stripped.rstrip(".!?,")
+            resolved = self._resolve_course_by_name(cleaned)
+            if resolved is None:
+                known = self._scan_known_courses()
+                if known:
+                    options = ", ".join(sorted(set(known.keys()))[:5])
+                    self._send_to_tts(
+                        f"Не нашёл такой курс. Доступны: {options}."
+                    )
+                else:
+                    self._send_to_tts(
+                        "У меня пока нет ни одного курса. Положи папку курса в courses или samples."
+                    )
+                _agent_log(f"[TUTOR] Awaiting-name: '{cleaned}' not resolved")
+                return True
+            name = cleaned
+            path = resolved
+            verb = "загрузи"
+            _agent_log(f"[TUTOR] Awaiting-name resolved: '{name}' → '{path}'")
+            # Fall through to actual load
+            return self._do_load_subject(name, path, verb)
+
         # Try long form first (explicit path takes precedence)
         m = self._LOAD_SUBJECT_RE.search(stripped)
         if m:
             name = m.group("name").strip().rstrip(".!?,")
             path = m.group("path").strip().rstrip(".!?,")
             verb = m.group("verb").lower()
-        else:
-            # Short form: resolve via known-courses scan
-            m = self._LOAD_SUBJECT_SHORT_RE.search(stripped)
-            if not m:
-                return False
-            name = m.group("name").strip().rstrip(".!?,")
-            verb = m.group("verb").lower()
-            resolved = self._resolve_course_by_name(name)
-            if resolved is None:
-                known = self._scan_known_courses()
-                if known:
-                    options = ", ".join(sorted(set(known.keys()))[:5])
-                    self._send_to_tts(
-                        f"Не нашёл курс {name}. Доступны: {options}."
-                    )
-                else:
-                    self._send_to_tts(
-                        f"Не нашёл курс {name}. Положи папку курса в courses или samples."
-                    )
-                _agent_log(f"[TUTOR] Short load: name='{name}' not resolved")
+            return self._do_load_subject(name, path, verb)
+
+        # Bare form: "загрузи курс" without a name. Park, ask back.
+        if self._LOAD_SUBJECT_BARE_RE.search(stripped):
+            known = self._scan_known_courses()
+            if not known:
+                self._send_to_tts(
+                    "У меня пока нет ни одного курса. Положи папку курса в courses или samples."
+                )
+                _agent_log("[TUTOR] Bare load: no known courses")
                 return True
-            path = resolved
-            _agent_log(f"[TUTOR] Short load resolved: name='{name}' → '{path}'")
+            options = ", ".join(sorted(set(known.keys()))[:5])
+            self._send_to_tts(
+                f"Какой курс загрузить? Доступны: {options}."
+            )
+            self._awaiting_course_name = True
+            _agent_log("[TUTOR] Bare load: asking for course name")
+            return True
+
+        # Short form: "загрузи курс X" — resolve via known-courses scan
+        m = self._LOAD_SUBJECT_SHORT_RE.search(stripped)
+        if not m:
+            return False
+        name = m.group("name").strip().rstrip(".!?,")
+        verb = m.group("verb").lower()
+        resolved = self._resolve_course_by_name(name)
+        if resolved is None:
+            known = self._scan_known_courses()
+            if known:
+                options = ", ".join(sorted(set(known.keys()))[:5])
+                self._send_to_tts(
+                    f"Не нашёл курс {name}. Доступны: {options}."
+                )
+            else:
+                self._send_to_tts(
+                    f"Не нашёл курс {name}. Положи папку курса в courses или samples."
+                )
+            _agent_log(f"[TUTOR] Short load: name='{name}' not resolved")
+            return True
+        path = resolved
+        _agent_log(f"[TUTOR] Short load resolved: name='{name}' → '{path}'")
+        return self._do_load_subject(name, path, verb)
+
+    def _do_load_subject(self, name: str, path: str, verb: str) -> bool:
         mode = "append" if verb == "добавь" else "replace"
         _agent_log(f"[TUTOR] Load subject: name='{name}', path='{path}', mode='{mode}'")
         self._send_to_tts(f"Загружаю предмет {name}, минуту.")
