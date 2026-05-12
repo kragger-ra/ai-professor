@@ -202,6 +202,15 @@ class RagModel:
             self.vec_store = self.create_vec_store()
 
     def create_vec_store(self):
+        # Empty course/docs dir is a valid state for a fresh student install:
+        # they haven't loaded a course yet, so RAG is None until they say
+        # "загрузи курс X" and reload_from_path swaps it in. FAISS.from_documents
+        # would raise on an empty list, so skip it.
+        if not self.docs:
+            print("[RagModel] No documents to vectorize — RAG starts empty; "
+                  "say 'загрузи курс <name>' to populate it.")
+            self.vec_store = None
+            return self.vec_store
         vectorize_time_start = time.time()
         try:
             self.vec_store = FAISS.from_documents(

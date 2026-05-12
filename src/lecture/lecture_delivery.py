@@ -54,13 +54,19 @@ DELIVERY_SYSTEM_PROMPT = (
 
 
 def prepare_lecture(topic: str, rag_context: str, duration_min: int = 30) -> dict:
-    """Generate lecture plan via Claude Opus. Returns dict with 'blocks' array."""
+    """Generate lecture plan via local LLM. Returns dict with 'blocks' array.
+
+    Token budget: LM Studio default Context Length is 4096 (per QUICKSTART).
+    System + this prompt + RAG slice + max_tokens output must all fit. With
+    the prompt around 700 tokens and max_tokens=2200, the RAG slice has to
+    be bounded — 2500 chars ≈ 700 tokens, leaving ~500 tokens of headroom.
+    """
     prompt = f"""Ты — методист. Создай план лекции для голосового ИИ-преподавателя.
 
 Тема: {topic}
 Длительность: {duration_min} минут
 Материалы курса:
-{rag_context[:6000]}
+{rag_context[:2500]}
 
 Создай JSON с полями "topic" (строка) и "blocks" — массив из 10-20 смысловых блоков.
 Каждый блок:
@@ -93,7 +99,7 @@ def prepare_lecture(topic: str, rag_context: str, duration_min: int = 30) -> dic
 
 Ответь ТОЛЬКО JSON, без markdown."""
 
-    text = _lm_studio_completion(prompt, max_tokens=4000, temperature=0.5)
+    text = _lm_studio_completion(prompt, max_tokens=2200, temperature=0.5)
     plan = json.loads(_strip_md_fences(text))
     print(f"[LECTURE] Plan generated: {len(plan.get('blocks', []))} blocks, "
           f"topic='{plan.get('topic', topic)}'")
