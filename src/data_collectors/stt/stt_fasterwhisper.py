@@ -23,9 +23,13 @@ from data_schema.structure_templates import REPO_DATA_PATH
 
 class FasterWhisperSTT:
     def __init__(self, device: str = "cuda"):
+        if device == "gpu":
+            device = "cuda"
         self.device = device
-        model_name = os.getenv("FASTER_WHISPER_MODEL_NAME", "large-v3")
-        compute_type = os.getenv("STT_COMPUTE_TYPE", "float16")
+        model_name = os.getenv("FASTER_WHISPER_MODEL_NAME", "large-v3-turbo")
+        compute_type = os.getenv("STT_COMPUTE_TYPE", "").strip()
+        if not compute_type:
+            compute_type = "float16" if device == "cuda" else "int8"
         cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper-models")
         self.model = WhisperModel(
             model_name,
