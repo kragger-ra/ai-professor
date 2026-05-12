@@ -1,107 +1,147 @@
 # AI Professor
 
-ИИ-агент-преподаватель для воркшопа PersonaLab Workshop по созданию цифровых персонажей.
-Голосовой диалог в реальном времени, RAG по материалам курса, адаптация под студента.
+Голосовой ИИ-агент-преподаватель: читает лекции, отвечает на вопросы голосом в реальном времени, использует RAG по материалам курса и адаптируется к студенту.
 
-**Платформа:** ИТМО AI Talent Hub / PersonaLab  
-**Трек:** Образовательный (ВКР)
+**Платформа:** ИТМО AI Talent Hub
+**Трек ВКР:** Образовательный
 
-## Быстрый старт
+---
+
+## Две сборки
+
+Репозиторий содержит **две независимые сборки** в разных ветках:
+
+| Ветка | Сценарий | Порт Gradio | VoiceMeeter | Уникальные фичи |
+|---|---|---|---|---|
+| **`main`** — Lecture | Аудитория: профессор читает лекцию + Q&A | `22228` | требуется (Zoom-mode / локальный) | автоконспект `.md` после лекции |
+| **`student-release`** — Tutor | Индивидуальная работа со студентом | `22229` | **не требуется** | voice RAG-load, quiz + remediation, профиль студента |
+
+### Для студентов на апробации
 
 ```bash
-cp .env.example .env
-# Заполнить API ключи и настройки аудио
+git clone -b student-release https://github.com/kragger-ra/ai-professor.git AI-Professor-Tutor
+cd AI-Professor-Tutor
+# дальше — STUDENT_QUICKSTART.md в корне ветки
+```
+
+Полная инструкция: [`STUDENT_QUICKSTART.md`](https://github.com/kragger-ra/ai-professor/blob/student-release/STUDENT_QUICKSTART.md) на ветке `student-release`.
+Подготовка своего курса: [`docs/RAG_PACKAGE_GUIDE.md`](https://github.com/kragger-ra/ai-professor/blob/student-release/docs/RAG_PACKAGE_GUIDE.md).
+
+### Для преподавателей (Lecture)
+
+Это `main` — аудиторный режим. См. ниже быстрый старт.
+
+---
+
+## Общее ядро (одинаково в обеих сборках)
+
+- **LLM**: локальная Gemma 3 E4B через LM Studio (default), либо облако (Mistral / Claude / OpenRouter)
+- **STT**: faster-whisper large-v3 на CUDA, energy-based VAD, ~1с латентность
+- **TTS**: Vosk русский голос с автоударениями (StressRNN), эмоциями, паузами по пунктуации
+- **RAG**: FAISS + bge-m3 эмбеддинги через LM Studio
+- **Streaming + interrupt**: первая фраза слышна через 2–3 с, прерывается голосом
+- **Профиль студента**: SQLite, обновляется meta-agentом в фоне
+
+## Быстрый старт (Lecture-сборка, main)
+
+```powershell
+git clone https://github.com/kragger-ra/ai-professor.git AI-Professor
+cd AI-Professor
+
+copy .env.example .env
+# Заполнить API ключи, аудиоустройства
+
 pip install -e .
 
-# Запустить Vosk TTS сервер (отдельный проект, порт 22232)
-python src/main.py
+# Запустить LM Studio (порт 22227) + Vosk TTS (22232) + VoiceMeeter Banana
+.\start_professor.bat
 ```
+
+UI: http://localhost:22228
 
 ## Архитектура
 
 3 процесса, связанные через `multiprocessing.Manager`:
 
 ```
-STT Process (faster-whisper, CUDA)
-  → ctx_chat (shared state)
-  → interrupt TTS при распознавании речи
-  → JSONL лог для конспектирования лекций
-
-CoreAgent (main process)
-  → construct_prompt (RAG + student profile + history)
-  → stream Mistral (queue+thread, 10s timeout)
-  → SentenceBuffer → tts_queue
-  ← interrupt при новом сообщении студента
-
-TTS Process (Vosk)
-  → queue-level prefetch (синтез следующего пока играет текущее)
-  → interrupt support
+STT (faster-whisper)        CoreAgent (main)            TTS (Vosk)
+     ↓                          ↑    ↓                      ↑
+     ctx_chat ←────────────── shared ─────────── tts_queue (prefetch)
+                                ↓
+                       [LLM stream + RAG + profile]
 ```
 
-## Ключевые возможности
+### Ключевые механизмы
 
-- **Streaming LLM** — ответ начинает звучать через 2-3с (Mistral Large)
-- **Interrupt** — студент может перебить в любой момент
-- **Stop commands** — "стоп/подождите" → мгновенная остановка без LLM
-- **RAG** — FAISS по 4 лекциям курса, score-based аннотации контекста
-- **Student Profiles** — SQLite, обновляются meta-agent (Claude Haiku) в фоне
-- **Конспектирование лекций** — STT → JSONL → periodic summarization → RAG
-- **Метрики** — SQLite логирование взаимодействий, latency, weekly stats
-- **Audio routing** — VoiceMeeter Banana: режим созвона (любое приложение через VB-Cable) и локальный режим
+- **Interrupt**: студент говорит → STT транскрибирует → interrupt TTS queue + break LLM stream
+- **Stop-commands**: «стоп / подождите / помолчите» → мгновенная остановка без LLM
+- **Post-interrupt re-entry**: после прерывания агент сразу обрабатывает новое сообщение
+- **Prefetch TTS**: следующее предложение синтезируется пока текущее играет
+- **LLM timeout**: `queue.get(timeout=10)` — защита от зависания провайдера
+- **Skeleton mechanism** (`USE_SKELETON=true`): двухпроходная подготовка — outline → delivery
+- **FSM лекции**: `idle → delivering → qa_audience → qa_quiz → farewell`
 
 ## Структура проекта
 
 ```
 src/
-  main.py                  # точка входа (Gradio UI + multiprocessing)
+  main.py                       # Gradio UI + multiprocessing entry
   agent/
-    core_agent.py           # главный агент: step() loop, interrupt, streaming
-    streaming_orchestrator.py  # LLM streaming с queue+thread timeout
-    meta_agent.py           # фоновый анализ контекста (Claude Haiku)
-    rag.py                  # FAISS RAG по материалам курса
-    prompt_generation/      # prompt_constructor, format helpers
+    core_agent.py                # step() loop, interrupt, streaming, FSM
+    streaming_orchestrator.py    # LLM stream с queue+thread timeout
+    meta_agent.py                # фоновый анализ контекста (профиль)
+    rag.py                       # FAISS RAG
+    prompt_generation/           # prompt_constructor + helpers
   lecture/
-    integration.py          # LectureManager — фасад конспектирования
-    transcript_buffer.py    # буфер STT-сегментов
-    summarizer.py           # map-reduce суммаризация через LLM
-    wake_word.py            # детекция обращений к профессору
-    student_profiles.py     # SQLite профили студентов
-  data_collectors/stt/      # STT через faster-whisper + interrupt
+    integration.py               # LectureManager — фасад
+    summarizer.py                # map-reduce суммаризация
+    student_profiles.py          # SQLite профили студентов
+    wake_word.py                 # детекция обращений
+  data_collectors/stt/           # faster-whisper STT + VAD
   tts/
-    simple_tts_handler.py   # queue-level prefetch streaming
-    vosk/                   # Vosk TTS client + sentence splitting
-  metrics/
-    logger.py               # SQLite логирование метрик
+    simple_tts_handler.py        # queue-level prefetch streaming
+    vosk/                        # Vosk client + sentence splitter + stress
+  metrics/logger.py              # SQLite метрики
 resources/
-  Prompts/                  # personalities_professor.yml, instructions
-  RAG/                      # course_materials/ (4 лекции), lecture_summaries/
-  Audio/tts_cache/          # pre-synthesized common phrases
+  Prompts/                       # personalities_professor.yml
+  RAG/                           # course_materials/, lecture_summaries/
 data/
-  student_profiles.db       # SQLite профили студентов
-  rag_vector_store/         # FAISS index (автосоздаётся)
-  metrics.db                # SQLite метрики
-  lecture_notes/            # JSONL лог + конспекты лекций
+  student_profiles.db            # SQLite (создаётся автоматически)
+  rag_vector_store/              # FAISS index
+  lecture_summaries/             # автоконспекты .md после лекций (только в Lecture)
+  metrics.db                     # SQLite метрики latency
 ```
 
 ## Конфигурация
 
-Основные переменные в `.env`:
+Главные переменные `.env` (полный список — `.env.example`):
 
-| Переменная | Описание |
+| Переменная | Назначение |
 |---|---|
-| `CORE_LLM_MODEL_NAME` | LLM для диалога (`mistral/mistral-large-latest`) |
-| `MISTRAL_API_KEY` | API ключ Mistral (LLM + embeddings) |
-| `TTS_BACKEND` | TTS бэкенд (`vosk`) |
-| `VOSK_TTS_URL` | URL Vosk TTS сервера (`http://localhost:22232`) |
-| `VOSK_SPEAKER_ID` | ID голоса Vosk (`4` — male_1) |
-| `SOUND_DEVICE_IN` | Микрофон для STT |
-| `OPENAI_API_KEY` | Ключ AWstore для Claude (meta-agent) |
-| `LECTURE_WEEK` | Номер текущей недели курса |
+| `USE_LOCAL_LLM` | `true` — LM Studio Gemma (default); `false` — облако |
+| `LM_STUDIO_MODEL_NAME` | `google/gemma-4-e4b` |
+| `CORE_LLM_MODEL_NAME` | Fallback для облака (`mistral/mistral-large-latest`) |
+| `MISTRAL_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | Опциональные ключи |
+| `TTS_BACKEND`, `VOSK_TTS_URL`, `VOSK_SPEAKER_ID` | Vosk TTS |
+| `FASTER_WHISPER_MODEL_NAME` | `small` / `large-v3-turbo` |
+| `AUDIO_MODE` | `local` / `meeting` (Lecture) / `none` (Tutor) |
+| `USE_SKELETON` | Двухпроходная подготовка лекции (выкл по умолчанию в Lecture) |
 
 ## Зависимости
 
-- Python 3.10+
-- NVIDIA GPU (faster-whisper CUDA)
+- Python 3.10 (только 3.10!)
+- NVIDIA GPU, минимум 8 ГБ VRAM (рекомендуется RTX 4070 12 ГБ)
+- LM Studio с runtime 2.13.0+ для Gemma 4
 - Vosk TTS сервер (отдельный проект)
-- Mistral API
-- Опционально: AWstore API (Claude для meta-agent)
+- VoiceMeeter Banana **только для Lecture** (для Tutor не нужен)
+
+Замеры VRAM, выбор кванта, бенчи — `docs/LM_STUDIO_SETUP.md`.
+
+## Тестирование
+
+- **BDD**: `pytest-bdd` 8.x, 57 сценариев total (23 Lecture + 34 Tutor) — `tests/bdd/`
+- **Ручное тестирование** для апробации: `MANUAL_BDD_TESTS.md` в корне репо (~30 живых сценариев с микрофоном)
+
+## Лицензия и контекст
+
+Исследовательская сборка ВКР. Используется при апробации с реальными студентами (май 2026) для сбора UX-наблюдений, метрик latency и баг-репортов перед следующей версией.
