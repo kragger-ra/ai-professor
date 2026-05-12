@@ -8,8 +8,9 @@ from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents.base import Document
 from langchain_core.vectorstores import VectorStoreRetriever
-from langchain_mistralai import MistralAIEmbeddings
 from langchain_text_splitters import TextSplitter
+
+from agent.llm_clients.lc_clients import get_embeddings_model
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
@@ -146,10 +147,7 @@ class RagModel:
         )
 
         try:
-            self.embeddings = MistralAIEmbeddings(
-                model="mistral-embed",
-                api_key=os.getenv("MISTRAL_API_KEY"),
-            )
+            self.embeddings = get_embeddings_model()
         except Exception as e:
             print(f"[RagModel] Error initializing embeddings: {str(e)}. RAG WILL NOT WORK!")
             traceback.print_exc()
@@ -212,17 +210,24 @@ class RagModel:
             print(
                 f"[RagModel Timing] Vectorization took {time.time() - vectorize_time_start:.2f} seconds"
             )
-            # https://github.com/langchain-ai/langchain/discussions/4188
+        except Exception as e:
+            self.vec_store = None
+            print(f"[RagModel] Error building vector store: {str(e)}")
+            traceback.print_exc()
+            return self.vec_store
+
+        # https://github.com/langchain-ai/langchain/discussions/4188
+        try:
             os.makedirs(RAG_STORE_DIR, exist_ok=True)
-        
             self.vec_store.save_local(RAG_STORE_DIR, index_name=self.index_name)
             print(
                 "[RagModel] Saved created vector store to disk: " + self.vec_store_full_path
             )
         except Exception as e:
-            self.vec_store = None
-            print(f"[RagModel] Error saving vector store: {str(e)}")
-            traceback.print_exc()
+            print(
+                f"[RagModel] Error saving vector store to disk ({str(e)}); "
+                "RAG continues in-memory, will rebuild next launch"
+            )
         return self.vec_store
 
     def get_docs_wordkeys(self, docs):
