@@ -754,13 +754,19 @@ class CoreAgent(BaseAgent):
         "останови лекцию", "останови занятие", "закончи лекцию",
         "закончи занятие", "прекрати лекцию", "стоп лекция", "стоп лекцию",
     )
-    # Short single-word end-commands ("хватит", "достаточно", "перестань",
-    # "останови", "закончи", "прекрати") — accepted only when the whole
-    # utterance is short, so a longer aside like "хватит шуток, продолжай"
-    # doesn't accidentally end the lecture.
+    # Short single-word end-commands ("стоп", "хватит", "помолчи" …) —
+    # accepted only when the whole utterance is short, so a longer aside
+    # like "хватит шуток, продолжай" doesn't accidentally end the lecture.
+    # 'помолч' / 'тихо' / 'тише' were previously pause-only words, but
+    # apробация showed students use them as full-stop. Treat them as end.
     _END_LECTURE_KEYWORDS = (
-        "хватит", "достаточно", "перестань", "прекрати", "останови",
-        "останов", "закончи",
+        "стоп", "хватит", "достаточно", "перестань", "прекрати",
+        "останови", "останов", "закончи", "помолч", "тихо", "тише",
+    )
+    # Stripped from the utterance before length / keyword matching so that
+    # "Профессор, стоп" counts as one effective word (= a clear command).
+    _ADDRESS_FORMS = (
+        "профессор", "преподаватель", "препод", "учитель", "ии-профессор",
     )
 
     def _handle_lecture_interrupt(self, _override_msg: str = None, _resume_after: bool = True):
@@ -784,11 +790,20 @@ class CoreAgent(BaseAgent):
             _agent_log("[LECTURE] End-lecture command detected (phrase)")
             self._enter_farewell()
             return
-        # Standalone keyword on a *short* utterance (хватит / останови /
-        # закончи / прекрати …). Word count <= 3 guards against asides like
-        # "хватит шуток, продолжай дальше" or "прекрати говорить про это".
-        if msg_lower and len(msg_lower.split()) <= 3 and any(
-            re.search(rf"\b{kw}\w*\b", msg_lower) for kw in self._END_LECTURE_KEYWORDS
+        # Standalone keyword on a *short* utterance (стоп / хватит /
+        # останови / помолчи / прекрати …). Strip the address form
+        # ("Профессор, ...") and trailing politeness fillers before
+        # counting words, so "Профессор, стоп, помолчите как угодно"
+        # is recognised even though it's 5 raw words.
+        msg_words = msg_lower.split()
+        # drop address forms (with or without trailing comma)
+        msg_words = [
+            w for w in msg_words
+            if w.rstrip(",.!?") not in self._ADDRESS_FORMS
+        ]
+        if msg_words and len(msg_words) <= 5 and any(
+            re.search(rf"\b{kw}\w*\b", " ".join(msg_words))
+            for kw in self._END_LECTURE_KEYWORDS
         ):
             _agent_log(f"[LECTURE] End-lecture command detected (keyword): '{msg_lower}'")
             self._enter_farewell()
