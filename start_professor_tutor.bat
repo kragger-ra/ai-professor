@@ -74,7 +74,10 @@ echo       Gradio ready after %GRADIO_WAIT% sec
 echo.
 echo ========================================
 echo   AI Professor (Tutor) is ready!
-echo   Opening http://localhost:22229
+echo   Browser tab is being opened by Gradio.
+echo   If it didn't, open http://localhost:22229 manually.
 echo ========================================
-start http://localhost:22229
+rem NB: main.py launches Gradio with inbrowser=True, which opens the tab
+rem itself. Re-doing 'start http://localhost:22229' here would open a
+rem duplicate tab in a race with Gradio.
 exit
