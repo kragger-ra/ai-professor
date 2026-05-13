@@ -59,7 +59,8 @@
 
 ### Альтернативы: Embeddings
 - OpenAI Embeddings → не работали (проблемы с API ключом / совместимостью)
-- Mistral AI Embeddings → работают, `mistral-embed` модель
+- Mistral AI Embeddings (`mistral-embed`) → работали на тот момент, **больше не используются**
+- Текущая модель: `text-embedding-user-bge-m3` через локальный LM Studio (OpenAI-compat API), вызывается через `get_embeddings_model()` в `llm_clients/lc_clients.py`
 
 ---
 
