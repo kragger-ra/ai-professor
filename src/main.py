@@ -328,12 +328,24 @@ with demo:
 
             from utils.voicemeeter_control import (
                 meeting_mode, local_mode, release_audio, get_status as vm_status,
+                toggle_agent_ears, get_agent_ears_status,
             )
 
             meeting_btn.click(fn=meeting_mode, outputs=[audio_status])
             local_btn.click(fn=local_mode, outputs=[audio_status])
             release_btn.click(fn=release_audio, outputs=[audio_status])
             demo.load(fn=vm_status, outputs=[audio_status])
+
+            # Agent-ears toggle: cuts Strip 0 → B2 so the agent stops
+            # hearing the call while the host's A1 monitor keeps playing.
+            # Use when host wants a private aside with the volunteer
+            # without the agent transcribing.
+            with gr.Row():
+                ears_btn = gr.Button("🎧 Уши агента: переключить", variant="secondary")
+                ears_status = gr.Textbox(value="—", label="Слышит ли агент звонок",
+                                         interactive=False)
+            ears_btn.click(fn=toggle_agent_ears, outputs=[ears_status])
+            demo.load(fn=get_agent_ears_status, outputs=[ears_status])
 
     with gr.Group():
         def _exit_all():
@@ -834,6 +846,17 @@ def main():
     lecture_manager = LectureManager(ctx_swarm)
     _log_timing("LectureManager initialized")
 
+    # Create the per-session recording directory BEFORE spawning subprocesses
+    # so they all inherit SESSION_DIR via env and write into the same folder.
+    # No-op unless SESSION_RECORD=true (set in .env / by start_for_volunteer.bat).
+    try:
+        from utils.session_recorder import _session_dir as _ensure_session_dir, is_enabled as _rec_on
+        if _rec_on():
+            _dir = _ensure_session_dir()
+            _log_timing(f"Session recording enabled → {_dir}")
+    except Exception as e:
+        _log_timing(f"Session recorder init failed (non-critical): {e}")
+
     # Initialize VoiceMeeter routing before TTS starts.
     # AUDIO_MODE=meeting for call apps (Discord/Meet/Teams/Telegram).
     # AUDIO_MODE=local for headphones-only mode through VoiceMeeter.
@@ -957,6 +980,36 @@ def main():
 
     Thread(target=_interaction_poller, daemon=True).start()
     _log_timing("Interaction poller thread started")
+
+    # Background VRAM / latency tracker. Confirms Г2 (peak VRAM ≤ 12 GB) and
+    # provides system-wide samples for analyze_session.py. No-op gracefully if
+    # torch isn't loaded or CUDA isn't available — the report just says so.
+    def _system_metrics_tracker():
+        sample_interval_s = 5
+        try:
+            import torch
+        except ImportError:
+            print("[VRAM] torch not installed — system_metrics tracker disabled")
+            return
+        if not torch.cuda.is_available():
+            print("[VRAM] CUDA unavailable — system_metrics tracker disabled")
+            return
+        while ctx_swarm["env"].get("actived", True):
+            try:
+                free_b, total_b = torch.cuda.mem_get_info()
+                used_mb = (total_b - free_b) / (1024 * 1024)
+                # ram_usage_mb column is reused for VRAM since we have one GPU
+                # process; the analyzer reads this same column.
+                lecture_manager.metrics.log_system_metrics(
+                    ram_usage_mb=float(used_mb),
+                    gpu_util_percent=0.0,
+                )
+            except Exception as e:
+                print(f"[VRAM] sample failed: {e}")
+            time.sleep(sample_interval_s)
+
+    Thread(target=_system_metrics_tracker, daemon=True).start()
+    _log_timing("VRAM tracker thread started")
 
     print("== main.py CODEBLOCK AFTER GRADIO LAUNCH ==")
     # starting agent NOW

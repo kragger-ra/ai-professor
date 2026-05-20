@@ -178,6 +178,40 @@ def local_mode() -> str:
         return f"Error: {e}"
 
 
+def toggle_agent_ears() -> str:
+    """Toggle Strip 0 → B2 routing in Banana — the channel the STT process
+    listens to. When OFF, the agent stops hearing the call audio entirely,
+    while the host's monitor (Strip 0 → A1) keeps playing in headphones.
+    Use this to talk to a volunteer privately (outside lecture flow)
+    without the agent transcribing the exchange.
+
+    Returns the new state as a short status string.
+    """
+    vm = _get_vm()
+    if vm is None:
+        return "VoiceMeeter not available"
+    try:
+        new_state = not bool(vm.strip[0].B2)
+        vm.strip[0].B2 = new_state
+        msg = "Уши агента: ВКЛ" if new_state else "Уши агента: ВЫКЛ"
+        print(f"[VoiceMeeter] {msg}")
+        return msg
+    except Exception as e:
+        traceback.print_exc()
+        return f"Error: {e}"
+
+
+def get_agent_ears_status() -> str:
+    """Quick poll for UI label."""
+    vm = _get_vm()
+    if vm is None:
+        return "—"
+    try:
+        return "Уши агента: ВКЛ" if bool(vm.strip[0].B2) else "Уши агента: ВЫКЛ"
+    except Exception:
+        return "—"
+
+
 def get_status() -> str:
     """Return current routing mode, or a diagnostic message if setup is incomplete."""
     if not _check_vm_banana():
