@@ -17,12 +17,11 @@ FAST_MODEL = os.getenv("CORE_LLM_MODEL_NAME", "mistral/mistral-large-latest")
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
 
-STREAM_TOKEN_TIMEOUT_S = 30  # raised from 10 — local LLM prompt processing on
-                              # long context (RAG + personality) can take 15-25s
-                              # before first token; with streaming ThinkingFilter
-                              # the first content token now arrives once the
-                              # model writes TRIGGER_START.
-MAX_STREAM_TIME_S = 90  # 5000 tok / 100 tps + headroom for skeleton-driven long answers
+STREAM_TOKEN_TIMEOUT_S = 7   # per-chunk idle in queue.get
+MAX_STREAM_TIME_S = 30       # wall-clock max — separate timer thread enforces
+                              # this even if litellm's HTTP recv hangs and our
+                              # in-loop checks never fire (incident 2026-05-17:
+                              # process sat dead for 3+ minutes on a long Q&A).
 FORCE_FLUSH_IDLE_S = 8
 
 
@@ -30,9 +29,14 @@ FORCE_FLUSH_IDLE_S = 8
 # Sentence buffer: accumulates tokens into complete sentences
 # =========================================================================
 
-# Sentence endings: .!? followed by space or end of string
-# Sentence end: .!? followed by space, but NOT after a digit (e.g. "1." "2.")
-_SENTENCE_END_RE = re.compile(r'(?<!\d)([.!?])(?:\s+|$)')
+# Sentence endings: .!? followed by clear start of next sentence or end of string.
+# A '.' splits only when followed by whitespace + capital letter / digit / quote /
+# opening bracket — this prevents splitting on dots inside paths and identifiers
+# like `data/natyan_database.sqlite` (after `.` comes lowercase `s` -> no split).
+# `?` and `!` are unambiguous — always split. `(?<!\d)` keeps "1." / "2." intact.
+_SENTENCE_END_RE = re.compile(
+    r'(?:(?<!\d)\.\s+(?=[А-ЯA-ZЁ0-9«"\'(])|[!?](?:\s+|$)|[.!?]$)'
+)
 # Word count threshold: flush even without punctuation
 _MAX_WORDS_NO_PUNCT = 20
 
@@ -63,10 +67,23 @@ class SentenceBuffer:
                 sentence = self.buffer[:end].strip()
                 self.buffer = self.buffer[end:].lstrip()
 
-                if len(sentence.split()) < 3 and self.buffer:
-                    # Too short — prepend to next sentence
-                    self.buffer = sentence + " " + self.buffer
-                    continue
+                if len(sentence.split()) < 4:
+                    # Too short — likely a leftover fragment (e.g. `sqlite`.` after
+                    # a path got split at a `.\sCapital` boundary, or a stray
+                    # tail like "Да."). Try to glue:
+                    #   1. If buffer still has content — prepend to next sentence
+                    #   2. Else, if we already emitted something in this batch —
+                    #      glue back onto the previous sentence
+                    #   3. Else — keep in buffer, wait for more tokens
+                    if self.buffer:
+                        self.buffer = sentence + " " + self.buffer
+                        continue
+                    if sentences:
+                        sentences[-1] = sentences[-1].rstrip() + " " + sentence
+                        continue
+                    # standalone tiny utterance, just keep in buffer
+                    self.buffer = sentence
+                    break
 
                 if sentence:
                     sentences.append(sentence)
@@ -115,32 +132,73 @@ def _stream_to_queue_lm_studio(messages, temperature, max_tokens, q, stop=None):
 
 
 def _stream_to_queue_mistral(messages, temperature, max_tokens, q, stop=None):
-    """Run litellm streaming in a thread, push tokens to queue."""
+    """Run litellm streaming in a thread, push tokens to queue.
+
+    Despite the name, this dispatches to whatever CORE_LLM_MODEL_NAME resolves
+    to (Mistral, OpenAI gpt-5.x, Claude, etc.) via litellm.
+    """
     try:
         _api_base = os.getenv("CORE_LLM_API_BASE")
         _effective = _api_base if _api_base and _api_base != "NONE" else None
+        _is_gpt5 = "gpt-5" in FAST_MODEL.lower()
+        # Diagnostic: size of every message we ship, so a stuck request can be
+        # correlated with prompt bloat (long history / RAG injects / etc.).
+        _total_chars = sum(len(m.get("content", "")) for m in messages
+                            if isinstance(m, dict))
+        print(
+            f"[STREAM] producer start: {len(messages)} msgs, "
+            f"{_total_chars} chars, model={FAST_MODEL}",
+            flush=True,
+        )
         kwargs = dict(
             model=FAST_MODEL,
             messages=messages,
-            max_tokens=max_tokens,
             temperature=temperature,
             stream=True,
             timeout=STREAM_TOKEN_TIMEOUT_S,
             api_base=_effective,
         )
+        if _is_gpt5:
+            kwargs["max_completion_tokens"] = max_tokens
+            _reasoning = os.getenv("LM_STUDIO_REASONING_EFFORT", "").strip()
+            if _reasoning:
+                kwargs["reasoning_effort"] = _reasoning
+        else:
+            kwargs["max_tokens"] = max_tokens
         if stop:
             kwargs["stop"] = stop
+        _t_call = time.time()
         response = litellm.completion(**kwargs)
+        print(
+            f"[STREAM] producer got response object in "
+            f"{time.time() - _t_call:.2f}s, starting chunk iteration",
+            flush=True,
+        )
         token_count = 0
+        _t_first = None
         for chunk in response:
             delta = chunk.choices[0].delta
             if delta and delta.content:
+                if _t_first is None:
+                    _t_first = time.time()
+                    print(
+                        f"[STREAM] first token in "
+                        f"{_t_first - _t_call:.2f}s after call: "
+                        f"{delta.content[:40]!r}",
+                        flush=True,
+                    )
                 q.put(delta.content)
                 token_count += 1
         if token_count == 0:
             print(f"[STREAM] WARNING: 0 tokens received from {FAST_MODEL}", flush=True)
+        else:
+            print(
+                f"[STREAM] producer done: {token_count} tokens, "
+                f"total {time.time() - _t_call:.2f}s",
+                flush=True,
+            )
     except Exception as e:
-        print(f"[STREAM] Error in thread: {e}", flush=True)
+        print(f"[STREAM] Error in thread: {type(e).__name__}: {e}", flush=True)
     finally:
         q.put(None)
 
@@ -175,6 +233,25 @@ def stream_fast(messages: list, temperature: float = 0.6,
         daemon=True,
     )
     t.start()
+
+    # Wall-clock kill switch: if the producer thread is hung inside
+    # litellm's HTTP recv (litellm's own `timeout=` is unreliable for the
+    # streaming endpoint — observed 2026-05-17), this timer guarantees the
+    # consumer unblocks after MAX_STREAM_TIME_S by pushing the end-of-
+    # stream sentinel into the queue. The hung producer thread stays as a
+    # leaked daemon — acceptable because main is unblocked and the process
+    # itself is fine.
+    def _wall_clock_abort():
+        time.sleep(MAX_STREAM_TIME_S)
+        try:
+            q.put(None)
+            print(f"[STREAM] Wall-clock abort fired at {MAX_STREAM_TIME_S}s — "
+                  f"producer thread leaked but consumer unblocked", flush=True)
+        except Exception:
+            pass
+
+    abort_timer = threading.Thread(target=_wall_clock_abort, daemon=True)
+    abort_timer.start()
 
     stream_start = time.time()
     got_first_token = False
