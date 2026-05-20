@@ -65,7 +65,7 @@ def construct_prompt(
     rag_score: float = 0.0,
 ) -> str:
     """Build system prompt from personality template + RAG + student context."""
-    personality_key = ctx_swarm["states"].get("personality", "professor_default")
+    personality_key = ctx_swarm["states"].get("personality", "professor_simpler")
     personality_file = "personalities_professor" if "professor" in personality_key else "personalities"
     system_template = prompt_load(personality_file, personality_key)
     # Substitute {COURSE_*} placeholders with the active course config.
@@ -164,6 +164,8 @@ def construct_prompt_messages(
     goal: str = None,
     unfinished_response: str = "",
     response_starting: str = "",
+    meta_instruction: str = "",
+    student_profile: str = "",
 ) -> Tuple[Union[List[BaseMessage], List[Dict], str], str]:
     """
     Constructs prompt messages for the professor agent.
@@ -269,6 +271,8 @@ def construct_prompt_messages(
     prompt = construct_prompt(
         rag_context,
         ctx_swarm=ctx_handler.ctx_swarm,
+        student_profile=student_profile,
+        meta_instruction=meta_instruction,
         rag_score=rag_score,
     )
 
