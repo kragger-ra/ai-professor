@@ -24,6 +24,7 @@ from data_schema.chat_structures import EventBase
 from data_schema.ctx_structures import CtxSwarmType
 from utils.time_helper import eztime
 from utils.patterns import BACKCHANNEL_PATTERNS
+from utils.session_recorder import get_recorder as _session_recorder, is_enabled as _session_record_on
 
 # Audio params
 SAMPLE_RATE = 16000
@@ -32,7 +33,12 @@ BLOCK_DURATION_MS = 100  # ms per read block
 BLOCK_SIZE = int(SAMPLE_RATE * BLOCK_DURATION_MS / 1000)
 
 # VAD params — energy-based
-SILENCE_THRESHOLD = 100  # RMS threshold (lowered from 200 to catch quiet word onsets)
+SILENCE_THRESHOLD = 300  # base RMS gate during silence
+SILENCE_THRESHOLD_WHILE_TTS = 700  # raised gate while the tutor is speaking
+# Two-level RMS gate: 300 in idle (catches real speech which is 700-1400 in
+# this room), 700 while TTS plays (rejects fifine ambient noise + TTS bleed
+# into closed-back SB Play! 3 that floats around 141-300). Real speech still
+# clears the higher gate cleanly.
 SPEECH_MIN_BLOCKS = 4  # min blocks (~0.4s) to count as speech
 SILENCE_AFTER_SPEECH_BLOCKS = 10  # ~1.0s of silence to finalize (was 5/0.5s)
 
@@ -185,9 +191,12 @@ def mic_stt_handler(
             blocksize=BLOCK_SIZE,
             device=audio_device_index,
         ) as stream:
+            _mic_rec = _session_recorder("mic") if _session_record_on() else None
             while ctx_swarm["env"]["actived"]:
                 data, overflowed = stream.read(BLOCK_SIZE)
                 audio_chunk = data[:, 0]  # mono
+                if _mic_rec is not None:
+                    _mic_rec.write(audio_chunk, SAMPLE_RATE)
                 rms = np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2))
 
                 # Lazy-load RAG vocabulary once available
@@ -205,17 +214,50 @@ def mic_stt_handler(
                     if pause > _STT_ACCUMULATE_PAUSE or (total_chars > _STT_ACCUMULATE_MAX_CHARS and pause > 1.0):
                         _flush_accumulator(ctx_handler, ctx_swarm)
 
-                if rms > SILENCE_THRESHOLD:
+                # Anti-echo: raise the gate while TTS is actively playing.
+                try:
+                    _tts_active = bool(
+                        ctx_swarm.get("voice", {}).get("is_speaking", False)
+                    )
+                except Exception:
+                    _tts_active = False
+                _gate = (
+                    SILENCE_THRESHOLD_WHILE_TTS if _tts_active else SILENCE_THRESHOLD
+                )
+                if rms > _gate:
                     # Speech detected
                     if not is_speaking:
                         is_speaking = True
                         speech_buffer.clear()
                         silence_count = 0
                         _stt_log(f"[MIC-STT] Speech started (RMS={rms:.0f})")
-                        # Signal that someone started speaking
-                        # Don't interrupt TTS here — wait for SPEECH_MIN_BLOCKS
-                        # to filter out short noise bursts
-                        pass
+                        # Publish "student is speaking" to the agent IMMEDIATELY
+                        # on the first speech sample. Previously this was only
+                        # set after SPEECH_MIN_BLOCKS (noise-filter gate) AND
+                        # cleared on _flush_accumulator — leaving a window of
+                        # under a second where the flag was actually True. The
+                        # blocked-lecture answer-timer polls this at 0.2s and
+                        # would routinely miss it, causing spurious nudges
+                        # while the student was already mid-sentence.
+                        ctx_swarm["voice"]["student_speaking"] = True
+                    else:
+                        # Re-assert "student_speaking" if _flush_accumulator
+                        # cleared it while internal `is_speaking` was still
+                        # True. This happens when the student talks
+                        # continuously past the _STT_ACCUMULATE_PAUSE: the
+                        # flush emits a partial chunk to chat AND clears the
+                        # flag — but the student didn't stop, just paused
+                        # briefly between phrases of one long answer. Without
+                        # this re-assert, the agent's settle-window in
+                        # _wait_for_student_message sees still_speaking=False
+                        # and prematurely returns the partial chunk as the
+                        # "final" answer (confirmed root cause of 2026-05-17
+                        # 19:19 bug — answer="Эм..." judged as no_answer
+                        # while student was still mid-sentence).
+                        # Cheap idempotent write — Manager.dict assignment is
+                        # ~ms; we hit it ~10/s on active speech only.
+                        if not ctx_swarm["voice"].get("student_speaking"):
+                            ctx_swarm["voice"]["student_speaking"] = True
                     speech_buffer.append(audio_chunk.copy())
                     silence_count = 0
                 else:
@@ -227,7 +269,8 @@ def mic_stt_handler(
                             tts_q = ctx_swarm["tts_queue"]
                             tts_q[:] = []
                             tts_q.append({"text": "interrupt", "emotion": "interrupt"})
-                            ctx_swarm["voice"]["student_speaking"] = True
+                            # student_speaking already True from speech-start;
+                            # no need to set it again here.
                             _stt_log(f"[MIC-STT] TTS interrupt after {SPEECH_MIN_BLOCKS} blocks of speech")
 
                         if silence_count >= SILENCE_AFTER_SPEECH_BLOCKS:
@@ -279,12 +322,39 @@ def _transcribe_and_accumulate(
     try:
         result = recognizer.pipeline(wav_io)
         text = result.get("text", "").strip()
+        lang_prob = float(result.get("language_probability", 1.0) or 0.0)
     except Exception as e:
         print(f"[MIC-STT] Transcription error: {e}")
         return
 
     if not text or len(text) < 2:
         print("[MIC-STT] Empty result, skipping")
+        return
+
+    # Confidence gate: faster-whisper happily transcribes ambient noise into
+    # Russian-looking strings. Below 0.6 language probability we treat the
+    # chunk as noise and drop it before it can reach meta-agent or the LLM.
+    _STT_CONFIDENCE_MIN = 0.6
+    if lang_prob < _STT_CONFIDENCE_MIN:
+        print(f"[MIC-STT] Low confidence (lang_prob={lang_prob:.2f}), "
+              f"skipping: '{text[:60]}'")
+        ctx_swarm["env"]["last_stt_confidence"] = lang_prob
+        return
+    ctx_swarm["env"]["last_stt_confidence"] = lang_prob
+
+    # Hallucination blacklist: phrases faster-whisper notoriously invents on
+    # silence / music / cough. Drop the chunk if the whole utterance is one.
+    _STT_HALLUCINATIONS = {
+        "спасибо за просмотр", "спасибо за внимание",
+        "подписывайтесь на канал", "ставьте лайки",
+        "продолжение следует", "субтитры подготовил",
+        "субтитры подготовлены",
+        "до свидания", "до встречи",
+        "продолжение в следующей серии",
+    }
+    _text_lower = text.strip().lower().rstrip(".!?,")
+    if _text_lower in _STT_HALLUCINATIONS:
+        print(f"[MIC-STT] Hallucination filtered: '{text}'")
         return
 
     # STT corrections: common misrecognitions in course context

@@ -265,8 +265,14 @@ class RagModel:
         """
         Explain a query
         returns a string of an explanation relevant for query.
+
+        Side effect: stores ``self.last_score`` (L2 of top-1) and
+        ``self.last_sources`` (list of {"score","preview","kind"} for top-2)
+        so the agent loop can attach retrieval evidence to metrics without
+        re-running the search.
         """
         NOT_FOUND_MSG = ""  # "Словарь не нужен. Ничего не нашлось."
+        self.last_sources = []
         try:
             explanation = ""
             docs_with_scores = self.retrieve_full(query)
@@ -275,6 +281,17 @@ class RagModel:
             best_score = min(scores) if scores else float("inf")
             self.last_score = best_score
             docs = [doc for doc, _ in docs_with_scores]
+            # Record top-2 for downstream logging (independent of >1.5 cutoff)
+            self.last_sources = [
+                {
+                    "score": float(s),
+                    "kind": d.metadata.get("kind", "") if hasattr(d, "metadata") else "",
+                    "subject": d.metadata.get("subject", "") if hasattr(d, "metadata") else "",
+                    "source": d.metadata.get("source", "") if hasattr(d, "metadata") else "",
+                    "preview": (d.page_content[:120] if hasattr(d, "page_content") else "").strip(),
+                }
+                for d, s in docs_with_scores[:2]
+            ]
 
             if not docs or best_score > 1.5:
                 return NOT_FOUND_MSG

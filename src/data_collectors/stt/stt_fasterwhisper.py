@@ -31,17 +31,26 @@ class FasterWhisperSTT:
         if not compute_type:
             compute_type = "float16" if device == "cuda" else "int8"
         cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "whisper-models")
+        self.model_name = model_name
         self.model = WhisperModel(
             model_name,
             device=device,
             compute_type=compute_type,
             download_root=cache_dir,
         )
+        print(
+            f"[STT] Loaded {model_name} on {device} (compute_type={compute_type})",
+            flush=True,
+        )
 
     def pipeline(self, pcm: bytes, *args, **kwargs):
         """Pipeline for speech-to-text processing
 
         INPUT FORMAT: WAV BYTES WITH HEADING!
+
+        Returns ``{"text": str, "language_probability": float}``. Callers that
+        only read ``["text"]`` keep working; the new key lets the mic handler
+        skip low-confidence chunks (noise / hallucinations).
         """
         beam = 1 if self.device == "cpu" else 5
         segments, info = self.model.transcribe(
@@ -53,11 +62,14 @@ class FasterWhisperSTT:
                 min_silence_duration_ms=500,
                 speech_pad_ms=400,
             ),
+            # condition_on_previous_text=True is the faster-whisper default and
+            # drags the model into looping/echoing earlier turns once a session
+            # runs long. Off for chat use.
+            condition_on_previous_text=False,
         )
-        # print(segments, info)
         got_text = "".join(segment.text for segment in segments)
-        asr = {"text": got_text}
-        return asr
+        lang_prob = float(getattr(info, "language_probability", 1.0) or 0.0)
+        return {"text": got_text, "language_probability": lang_prob}
 
     def transcribe_audio(self, audio: AudioSegment) -> str:
         # audio.export("tmp.wav", format="wav")

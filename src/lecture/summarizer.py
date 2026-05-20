@@ -20,17 +20,21 @@ logger = logging.getLogger(__name__)
 
 _LM_STUDIO_BASE = os.getenv("LM_STUDIO_API_BASE", "http://127.0.0.1:22227/v1").rstrip("/")
 _LM_STUDIO_MODEL_DEFAULT = os.getenv("LM_STUDIO_MODEL_NAME", "google/gemma-4-e4b-it")
+_LM_STUDIO_API_KEY = os.getenv("LM_STUDIO_API_KEY", "")
+_REASONING_EFFORT = os.getenv("LM_STUDIO_REASONING_EFFORT", "").strip()
 
 
 def _lm_studio_complete(model: str, prompt: str, max_tokens: int) -> str:
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
+        "max_completion_tokens": max_tokens,
         "stream": False,
-        "reasoning_effort": "none",
     }
-    r = requests.post(f"{_LM_STUDIO_BASE}/chat/completions", json=body, timeout=180)
+    if _REASONING_EFFORT:
+        body["reasoning_effort"] = _REASONING_EFFORT
+    headers = {"Authorization": f"Bearer {_LM_STUDIO_API_KEY}"} if _LM_STUDIO_API_KEY else None
+    r = requests.post(f"{_LM_STUDIO_BASE}/chat/completions", json=body, headers=headers, timeout=180)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
 
