@@ -1,0 +1,1262 @@
+[
+  {
+    "chunk_id": 0,
+    "doc_id": "9f9c60ea-9045-43a2-8449-3f302bcd89b8",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "# Архитектурно-функциональные характеристики подсистем долговременной памяти и инструментального исполнения автономного агента курса PersonaLab Workshop",
+    "content_len": 152
+  },
+  {
+    "chunk_id": 1,
+    "doc_id": "6c54f260-1c29-40b6-81a5-ed89ddab815b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Предметная область\n\nНастоящий учебно-методический материал предназначен для предварительного ознакомления обучающегося с базовыми архитектурными концепциями подсистемы персистентного хранения пользовательских профилей и подсистемы инструментального вызова, реализованных в рамках курса. Изложение носит обзорно-номенклатурный характер.",
+    "content_len": 338
+  },
+  {
+    "chunk_id": 2,
+    "doc_id": "9236a2bd-e28c-4c3b-906c-9c08d1b73dc2",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "---\n\n## Раздел 1. Подсистема персистентного хранения пользовательских репрезентаций",
+    "content_len": 83
+  },
+  {
+    "chunk_id": 3,
+    "doc_id": "29cb06b4-de96-4605-b1b9-04275dfcc3a1",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.1. Архитектурное основание\n\nПодсистема реализована на основе встраиваемой реляционной СУБД **SQLite**, дисковый образ которой локализован в директории `data/` файловой иерархии проекта. В рамках актуализированной редакции реализации осуществлён переход на серверную СУБД **Postgres** при сохранении инвариантности логики манипуляции данными. Инспекция содержимого базы осуществляется посредством клиентского приложения **DB Browser for SQLite**, отображающего таблицу пользовательских записей (`users`).",
+    "content_len": 509
+  },
+  {
+    "chunk_id": 4,
+    "doc_id": "e4788bf3-361c-4b2d-af66-ae65b7eb4f7d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.2. Состав пользовательской записи\n\nПоле **`summary`** представляет собой текстовый атрибут свободного формата, содержащий вербальную характеристику пользователя, сформированную средствами большой языковой модели и не подлежащую структуризации в терминах предметной онтологии.",
+    "content_len": 281
+  },
+  {
+    "chunk_id": 5,
+    "doc_id": "0d80b31d-37d2-4d14-a178-fb04548dcd22",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Поле **`rank`** представляет собой целочисленный атрибут, инкапсулирующий количественную оценку расположения агента к пользователю, ограниченный диапазоном допустимых значений от единицы до пяти включительно.",
+    "content_len": 208
+  },
+  {
+    "chunk_id": 6,
+    "doc_id": "8caa5aec-722f-484b-8ed1-a227cfa9e393",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Дополнительно в составе записи присутствуют атрибуты идентификации пользователя на уровне игрового интерфейса. Существенно, что подсистема **не осуществляет персистенции полного хронологического корпуса коммуникативных актов пользователя**.",
+    "content_len": 240
+  },
+  {
+    "chunk_id": 7,
+    "doc_id": "013060fb-effc-46b4-bdf0-2a3a77014c96",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.3. Механизм актуализации `summary`\n\nПринятие решения о записи содержимого атрибута `summary` локализовано в области ответственности языковой модели и реализуется через явный вызов специализированного инструмента **`SaveUserInfoTool`**, принимающего текстовую характеристику и обеспечивающего её запись в соответствующее поле. Альтернативные механизмы — синтаксическая обработка коммуникативного корпуса, рекуррентный шаблонный пересмотр, ручной модераторский ввод — в составе штатной реализации не задействованы.",
+    "content_len": 518
+  },
+  {
+    "chunk_id": 8,
+    "doc_id": "64d47f46-7356-4bff-83a1-f78a3474eb50",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.4. Механизм модификации `rank`\n\nИнкрементальная модификация значения `rank` осуществляется посредством инструмента **`Like Tool`** программной сигнатуры `like(nick)`. Вызов влечёт увеличение значения на единицу при условии ненарушения верхней границы диапазона.",
+    "content_len": 267
+  },
+  {
+    "chunk_id": 9,
+    "doc_id": "3f009b5d-2393-4371-acd0-b76c38531323",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.5. Репрезентация профилей в контексте языковой модели",
+    "content_len": 59
+  },
+  {
+    "chunk_id": 10,
+    "doc_id": "a846d701-2457-41a2-a39c-89e25ec6145c",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Сборка системного промпта реализуется компонентом **`prompt-constructor`**, осуществляющим инъекцию атрибутов `summary` и `rank` совокупности всех известных агенту пользователей в формируемый промпт **при каждой его пересборке** без кэширования и отложенной выгрузки.",
+    "content_len": 267
+  },
+  {
+    "chunk_id": 11,
+    "doc_id": "753cbcb5-14df-4255-a0f4-ea00779a3f13",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.6. Программная структура `UserInfo`\n\nПользовательская сущность инкапсулирована в составе агрегирующей структуры **`UserInfo`**, объединяющей атрибуты записи базы данных, игровые метрические показатели и механизм множественной никнейм-привязки, обеспечивающий ассоциацию нескольких идентификаторов с единым профилем.",
+    "content_len": 321
+  },
+  {
+    "chunk_id": 12,
+    "doc_id": "6d0ffe81-0035-4c2d-a210-c79fcad042a8",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 1.7. Инъекция дескриптора базы в исполнительный контекст инструментов",
+    "content_len": 73
+  },
+  {
+    "chunk_id": 13,
+    "doc_id": "40a5903a-8f2c-4ce1-ba0e-94b486ee39c9",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Программный доступ инструментов к персистентному хранилищу обеспечивается посредством инициализационной инъекции через конфигурационный объект **`ToolConfig`**, передаваемый инструментам на этапе их инициализации.",
+    "content_len": 213
+  },
+  {
+    "chunk_id": 14,
+    "doc_id": "f3b0e05d-0f99-4838-9ef0-4bb4279df539",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "---\n\n## Раздел 2. Подсистема инструментального исполнения",
+    "content_len": 57
+  },
+  {
+    "chunk_id": 15,
+    "doc_id": "b30dde5e-07f4-41e7-9902-c7c92297b1bc",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.1. Программная репрезентация инструмента\n\nИнструмент реализован в форме функции на языке Python, дислоцированной в составе специализированной директории инструментов проекта (например, `tools/`). Альтернативные формы репрезентации — записи базы данных, контейнеризованные сервисы, плагины внешних исполнительных сред — не задействованы.",
+    "content_len": 342
+  },
+  {
+    "chunk_id": 16,
+    "doc_id": "90d5de4d-54c4-4b31-aad0-2f1f62d3a211",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.2. Декларативное экспонирование инструмента модели",
+    "content_len": 56
+  },
+  {
+    "chunk_id": 17,
+    "doc_id": "e2ff0e86-6499-4a97-8cb7-daa464663930",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Текстовая дескрипция инструмента, доступная языковой модели в системном промпте, экстрагируется из **docstring** соответствующей функции и копируется в текстовый поток промпта без промежуточной обработки.",
+    "content_len": 204
+  },
+  {
+    "chunk_id": 18,
+    "doc_id": "a328c9ee-d55c-48dc-9b8c-fa364fedcb82",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.3. Базовый коммуникативный инструмент `speak`",
+    "content_len": 51
+  },
+  {
+    "chunk_id": 19,
+    "doc_id": "21b88dd4-36da-4f04-9e50-84f6b44c0c9b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Инструмент **`speak`** реализует двукомпонентное действие синхронного характера: передачу реплики в подсистему синтеза речи (TTS) и параллельную публикацию того же содержимого в коммуникативный канал игрового чата. Параметр **`emotion`** обеспечивает модуляцию интонационных характеристик синтезируемого сигнала и допускает переключение между голосовыми вариантами.",
+    "content_len": 365
+  },
+  {
+    "chunk_id": 20,
+    "doc_id": "368674d1-7bed-4aa1-9ab4-1a8bf57a9cf8",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.4. Динамическое контекстуальное дескриптирование: `tool_status`",
+    "content_len": 69
+  },
+  {
+    "chunk_id": 21,
+    "doc_id": "332ad973-17d1-4f86-9470-99f4bd458e88",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Для инструментов, функциональность которых обусловлена изменчивым состоянием окружения, предусмотрен метод **`{tool_name}_tool_status()`**, возвращающий текстовую дескрипцию актуального контекстуального состояния. Активация метода осуществляется **при каждой процедуре пересборки системного промпта**.",
+    "content_len": 301
+  },
+  {
+    "chunk_id": 22,
+    "doc_id": "65e8cdb1-28cb-4be7-b226-34179bfe9aae",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.5. Постпроцессинг выходного потока модели\n\nАнализ текстового вывода модели на предмет идентификации инструментальных вызовов реализован средствами компонентов **`ResponseParser`** и **`ToolExecutor`**, осуществляющих синтаксический разбор сгенерированного текста и инициирующих исполнение Python-функций с экстрагированными аргументами. Модель возвращает текстовый поток, а не структурированную JSON-репрезентацию.",
+    "content_len": 420
+  },
+  {
+    "chunk_id": 23,
+    "doc_id": "a8957ea1-a176-4db7-a26d-a6eb3ab2c8fc",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.6. Сравнительная характеристика нотации вызовов",
+    "content_len": 53
+  },
+  {
+    "chunk_id": 24,
+    "doc_id": "d162ef2d-3fc3-4a6b-9943-adc7472357f8",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Реализация задействует компактный командный формат (синтаксическая форма примера: `like nick`), противопоставляемый JSON-нотации индустриальных API-провайдеров. Преимущественной характеристикой избранной формы выступает её **большая компактность относительно JSON-репрезентации и обеспечиваемая ею ускоренная реактивность агента**.",
+    "content_len": 331
+  },
+  {
+    "chunk_id": 25,
+    "doc_id": "6a433949-0879-4fd7-97d9-f94e565d658a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.7. Техника префиксного предзаполнения\n\nПриём управления генеративным поведением модели, обозначаемый термином **prefill** («Focus-хак»), состоит в предварительной инициализации начального фрагмента ответа ассистента префиксной конструкцией, продолжение которой императивно делегируется модели, что обеспечивает фиксацию формата и тематического содержания ответа. Условиями неприменимости приёма являются: **функционирование в составе большинства индустриальных API-провайдеров**, не предоставляющих контроля над инициальным фрагментом генерации; **применение к моделям рассуждающего класса** (reasoning-моделям).",
+    "content_len": 618
+  },
+  {
+    "chunk_id": 26,
+    "doc_id": "53c002ef-4ca1-4d7e-bf20-a1f65eee226a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.8. Расширение номенклатуры инструментов\n\nДостаточным условием включения инструмента является создание Python-функции с информативно сформулированной docstring-дескрипцией; в случае необходимости динамической контекстуальной дескрипции — параллельное определение сопутствующего метода `{name}_tool_status()`.",
+    "content_len": 313
+  },
+  {
+    "chunk_id": 27,
+    "doc_id": "4fb011ff-20d8-47b7-b223-7de878a2cd71",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### 2.9. Обоснование отказа от индустриальных фреймворков",
+    "content_len": 57
+  },
+  {
+    "chunk_id": 28,
+    "doc_id": "2afe4eba-8ae4-4306-aedc-3c7a1599b7ce",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Архитектурным решением авторов является разработка собственной pipeline-реализации в противоположность задействованию агентных фреймворков (**LangChain**, **LangGraph**, **SmolAgents**). Аргументацией выступает следующее положение: означенные фреймворки концептуально ориентированы на задачи конечно-результативного типа, тогда как архитектура рассматриваемого агента предполагает функционирование в режиме перманентного исполнения (бесконечного цикла while-true).",
+    "content_len": 464
+  },
+  {
+    "chunk_id": 29,
+    "doc_id": "f8d10341-cb82-4259-af7c-dfcfa29d294b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\00_personalab_canonical.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "---\n\n> Дальнейшее разрешение интерпретационных затруднений возлагается на взаимодействие с агентом-репетитором.",
+    "content_len": 111
+  },
+  {
+    "chunk_id": 30,
+    "doc_id": "3950ccf7-cb1b-4533-823e-6905e0e5bd5b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "# Дополнительный материал к памяти и системе инструментов",
+    "content_len": 57
+  },
+  {
+    "chunk_id": 31,
+    "doc_id": "87b191dc-6cc2-4ee7-a16c-59cad42a0707",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Этот файл точечно покрывает два концепта, которые упомянуты в материалах курса (week1, lecture_w3-4_full), но не вошли в активные week2_lecture.md и week3_lecture.md. Без них тьютор не сможет ответить на вопросы про UserInfo и про сравнение командного формата с JSON.",
+    "content_len": 267
+  },
+  {
+    "chunk_id": 32,
+    "doc_id": "4ef4ed1a-26cd-4172-b3e7-a22315f46731",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "---\n\n## UserInfo — структура «всё что агент знает о пользователе»",
+    "content_len": 65
+  },
+  {
+    "chunk_id": 33,
+    "doc_id": "0a9dfdee-9029-4c57-9966-4d41f4577f8e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "UserInfo — это структура данных об одном игроке (пользователе), которую агент собирает каждый раз, когда нужно ответить или принять решение про этого человека. Не путать с просто «строкой в БД»: UserInfo — это **агрегированный объект**, который объединяет несколько источников.",
+    "content_len": 277
+  },
+  {
+    "chunk_id": 34,
+    "doc_id": "e85d8bb2-d0a5-4ed7-99af-dde1fcb274d5",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Что входит в UserInfo:**\n\n- Привязка нескольких ников к одному пользователю (если человек играл с разных аккаунтов, его можно объединить под одной UserInfo).\n- Данные из БД: summary (текстовая характеристика, что говорил/делал) и rank (число 1-5, отношение агента к пользователю).\n- Статистика упоминаний этого пользователя другими.\n- Игровые метрики в реальном времени: HP, режим (выживание/креатив), позиция в мире, предмет в руках, возможность атаки.",
+    "content_len": 455
+  },
+  {
+    "chunk_id": 35,
+    "doc_id": "fc4e4b3d-2518-4f0d-b032-7ed41c2e3fd9",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Зачем нужно объединение:** одиночное поле БД не даёт LLM полной картины. Чтобы агент решил «прыгать ли на этого человека», нужны и текстовое summary (был ли он раньше враждебен), и rank (как агент к нему сейчас относится), и игровые метрики (есть ли у него оружие). UserInfo — это сборка всего этого в один объект.",
+    "content_len": 316
+  },
+  {
+    "chunk_id": 36,
+    "doc_id": "4199cdae-9e34-4ddd-9eea-d24723da5ada",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Где используется:** Prompt Constructor берёт UserInfo по нику говорящего и подставляет в сборку промпта перед каждым ответом LLM.",
+    "content_len": 131
+  },
+  {
+    "chunk_id": 37,
+    "doc_id": "80f6ffef-fe56-4c0e-a5b6-5aec696ebe2f",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "---\n\n## Командный формат инструментов vs JSON\n\nСтандартный подход в большинстве агентных фреймворков (LangChain, OpenAI function calling) — это JSON-формат вызова инструментов. LLM генерирует JSON-объект с полями `name` и `arguments`, фреймворк его парсит и вызывает функцию.",
+    "content_len": 275
+  },
+  {
+    "chunk_id": 38,
+    "doc_id": "9f119697-7cbb-4116-903e-0aad7b7283c8",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "В этом проекте используется другой подход — **командный формат**. LLM пишет вызов инструмента как строку команды, по типу bash-команды или slash-команды в чате:",
+    "content_len": 160
+  },
+  {
+    "chunk_id": 39,
+    "doc_id": "579b04b0-bed4-4897-af7d-9e703abf2482",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "```\nstrike nick\nsave-user-info!\nspeak комментарий\nlike nick\n```",
+    "content_len": 63
+  },
+  {
+    "chunk_id": 40,
+    "doc_id": "8da9413c-535f-420e-9c3f-555f1e0280db",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Каждый инструмент — это обычная Python-функция в папке `tools/`. Её docstring автоматически копируется в промпт как описание для LLM.",
+    "content_len": 133
+  },
+  {
+    "chunk_id": 41,
+    "doc_id": "7f19bf30-7764-473e-a760-4f43295ae618",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Почему командный формат лучше JSON для этого случая:**",
+    "content_len": 56
+  },
+  {
+    "chunk_id": 42,
+    "doc_id": "00a795d5-ceae-4367-a20b-6a10c5bf3845",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "1. **Компактнее.** JSON-вызов требует кавычек, фигурных скобок, явных названий полей. Командная строка `strike nick` — это два слова. Меньше токенов в промпте и в ответе LLM → меньше задержка, меньше расход контекста.",
+    "content_len": 217
+  },
+  {
+    "chunk_id": 43,
+    "doc_id": "82e66968-9e0b-4c38-8c36-549a42f5c947",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "2. **Быстрее реагирует.** Меньше токенов на генерацию → раньше получаем готовую команду из stream'а. Для реактивного агента, который должен среагировать на событие в Minecraft за секунды, это критично.",
+    "content_len": 201
+  },
+  {
+    "chunk_id": 44,
+    "doc_id": "324a98ae-7ce1-4653-91c8-0aca5f677de3",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "3. **Проще парсить.** ResponseParser работает регулярками и split'ом строки. JSON-парсер ломается на любой невалидной кавычке от LLM (а слабые модели регулярно её ставят).",
+    "content_len": 171
+  },
+  {
+    "chunk_id": 45,
+    "doc_id": "00ef5ff0-5e54-4f57-9a77-767fa21f539a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "4. **Привычнее для LLM.** Игровые/чатовые модели видели в обучающем корпусе много slash-команд (Discord, Twitch, Minecraft). JSON tool_calls — это технический формат, на нём обучены преимущественно instruct-модели от больших провайдеров.",
+    "content_len": 237
+  },
+  {
+    "chunk_id": 46,
+    "doc_id": "e180c670-676d-4a4b-a2ef-c537f49b332a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "5. **Не требует fine-tuning.** SmolAgents предлагает альтернативу — LLM пишет Python-код вызова. Но без fine-tuning модели начинают писать сложный код вместо простого вызова (циклы, новые функции на 100 строк). Командный формат остаётся простым и понятным без дополнительного обучения.",
+    "content_len": 285
+  },
+  {
+    "chunk_id": 47,
+    "doc_id": "3fb553c5-93dd-4a1d-86c3-16bd16ef1043",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Минус командного формата:** для каждой команды нужен свой парсер аргументов. Но в pipeline стримерши команд десятки, не сотни, и однотипные — это терпимая цена за остальные плюсы.",
+    "content_len": 181
+  },
+  {
+    "chunk_id": 48,
+    "doc_id": "b458877d-d3ae-4e22-b217-ae7ac931ff9a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "---\n\n## prefill и Focus — приёмы для системы инструментов",
+    "content_len": 57
+  },
+  {
+    "chunk_id": 49,
+    "doc_id": "a671bc2a-1646-420a-9ce0-8c65b6e7e980",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Когда LLM используется как агент, который должен **выбирать инструменты и вызывать их в правильном формате**, слабые модели регулярно ошибаются: вместо вызова инструмента продолжают чужой диалог, начинают новую реплику от другого ника, выдают пустой ответ. Чтобы заставить такую LLM именно реагировать как агент (с командой инструмента в начале), используют две связанные техники: **prefill** и хак **«Focus»**.",
+    "content_len": 411
+  },
+  {
+    "chunk_id": 50,
+    "doc_id": "5dab0f3d-6e22-4dbb-8756-f111e878f24e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**prefill (предзаполнение ответа):** в API многих LLM можно передать начало ответа как уже сказанное ассистентом. LLM получает промпт + «уже начатый» ответ, и её задача — продолжить с этого места. Это глобальный приём, не специфический для этого проекта.",
+    "content_len": 254
+  },
+  {
+    "chunk_id": 51,
+    "doc_id": "7959b092-f58b-4c5a-9b8c-c2b49d46680f",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Пример. Без prefill агент получает только промпт и может ответить пустотой или копией чужой реплики. С prefill в качестве «начала ответа» подставляется строка типа `agent_nick: ` или начало нужной tool-команды (`speak ` или `like `). LLM видит уже начатый ответ от имени агента и продолжает в нужном формате.",
+    "content_len": 308
+  },
+  {
+    "chunk_id": 52,
+    "doc_id": "140d0e64-5034-47cc-88d1-9f1e32674cf5",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Хак «Focus»:** конкретное применение prefill в pipeline стримерши. Когда нужно гарантированно начать ответ командой инструмента, в prefill подсовывают начало команды. LLM «фокусируется» именно на завершении этой команды, а не свободно генерирует.",
+    "content_len": 248
+  },
+  {
+    "chunk_id": 53,
+    "doc_id": "a0f13f3e-b9f2-47be-8c34-609bca7890a4",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Связь с системой инструментов:** командный формат инструментов и prefill работают в паре. Командный формат компактный — для prefill достаточно подсунуть 1-2 слова (`speak `), и LLM выдаёт остаток. С JSON-форматом prefill сложнее: нужно подсовывать частичный JSON-объект, что LLM путает.",
+    "content_len": 288
+  },
+  {
+    "chunk_id": 54,
+    "doc_id": "3fc6faad-7af3-4e1a-9472-162a70238df0",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Ограничения prefill:**\n- НЕ работает на API-моделях большинства провайдеров (OpenAI, Anthropic, Google) — у них в API нет поля «начало ответа ассистента», prefill блокируется по соображениям безопасности.\n- НЕ работает на reasoning-моделях (o1, o3, gpt-5 reasoning, DeepSeek R1) — у них собственный внутренний reasoning, который prefill ломает.\n- Работает с большинством локальных LLM, которые запускаются через стандартный inference (llama.cpp, vLLM, transformers).",
+    "content_len": 468
+  },
+  {
+    "chunk_id": 55,
+    "doc_id": "8b642ab4-a679-42a9-857f-d0eabee68f2b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\supplemental_aprobacia.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Вывод:** prefill — это не про память агента, и не про определение инструмента как Python-функции. Это **исполнительный приём**, который заставляет LLM реально пользоваться системой инструментов, а не игнорировать её. Без prefill слабые локальные модели в pipeline стримерши работали бы плохо.",
+    "content_len": 294
+  },
+  {
+    "chunk_id": 56,
+    "doc_id": "b206dc34-e1f9-4af4-b064-39d2b354abe6",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "# Лекция 2 — Архитектура baseline: от Docker до агентного цикла",
+    "content_len": 63
+  },
+  {
+    "chunk_id": 57,
+    "doc_id": "a185024b-d9dc-4f4e-ac58-98ed9276ec67",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Ключевые темы\n\n- Полная архитектура pipeline стримерши\n- Система фильтрации входящих и исходящих сообщений (регулярные выражения + нейронные фильтры)\n- Java-часть проекта: структура мода, система задач (chains), Py4J Entry Point\n- Python-часть: MindBridge, цикл событий (KTX Swarm), промпт-конструктор\n- Система инструментов (tools) агента: speak, yandere mode, minecraft commands\n- Промпты и файл personalities.yml\n- Смарт-триггеры для автономных агентов\n- LiteLLM для смены моделей\n- Сравнение агентных фреймворков: LangChain, LangGraph, SmolAgents vs собственная реализация",
+    "content_len": 579
+  },
+  {
+    "chunk_id": 58,
+    "doc_id": "182c99b7-adae-4982-8b0e-95158444712f",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Теория\n\n### Общая архитектура pipeline\n\nДля запуска стримерши необходимо поднять несколько компонентов:\n1. **Docker-контейнеры** — в папке `docker/` лежит docker-compose, который поднимает два контейнера: фильтр (фильтрация сообщений) и TTS (Fish Speech)\n2. **Minecraft** с модом AltaClev\n3. **Python-скрипт** — основная логика агента\n4. **OBS / YouTube Studio** — для ведения трансляции",
+    "content_len": 390
+  },
+  {
+    "chunk_id": 59,
+    "doc_id": "2acc8e9c-8dfd-4a6b-a5a4-23a9702f50f4",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Порядок запуска: сначала Docker (TTS + фильтр), затем Minecraft, потом Python-скрипт.",
+    "content_len": 85
+  },
+  {
+    "chunk_id": 60,
+    "doc_id": "e8a19357-d2a3-48c5-b864-640e5ebcc76f",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Система фильтрации сообщений\n\nДвухуровневая фильтрация:\n\n**Первый уровень — регулярные выражения (regex).** Фильтрует по корням слов (не по полным словам), чтобы учесть склонения и словоформы. Используются regex-паттерны для блокировки вариаций нежелательных слов. Прямое вхождение (без regex) используется для жёстких блоков: фамилии политиков, религиозная тематика. Если корень слова совпадает — сообщение блокируется полностью.",
+    "content_len": 434
+  },
+  {
+    "chunk_id": 61,
+    "doc_id": "ee229442-1527-4e59-bf5b-c840e927d131",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Второй уровень — нейронные фильтры.** Более медленный, но контекстно-зависимый. Оценивает токсичность сообщения по шкале (score). Обычный мат без токсичного контекста (score < 10) пропускается. Токсичный контекст (оскорбления меньшинств и т.д.) блокируется.",
+    "content_len": 259
+  },
+  {
+    "chunk_id": 62,
+    "doc_id": "8679c30b-2f66-4383-80d0-2f707696d30c",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Двусторонняя фильтрация:** фильтруются и входящие сообщения (от игроков), и выходные (от LLM). Принцип garbage in → garbage out: если не почистить вход, LLM начнёт генерировать мат и нежелательный контент.",
+    "content_len": 207
+  },
+  {
+    "chunk_id": 63,
+    "doc_id": "d61e9494-55ac-4550-8c8f-15a7b08d80a5",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Наборы фильтров конфигурируемы: Twitch-набор блокирует оскорбления меньшинств, политику, религию. Обычный мат — пропускается (опционально).",
+    "content_len": 139
+  },
+  {
+    "chunk_id": 64,
+    "doc_id": "7a9524d1-399f-49a3-aecd-acb3fc09ab8f",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Java-часть проекта (мод AltaClev)\n\nПроект на Java — объектно-ориентированный, каждая папка = модуль/пакет, внутри — классы.",
+    "content_len": 127
+  },
+  {
+    "chunk_id": 65,
+    "doc_id": "db6b028c-ee2a-461c-85bc-6b4c5ca1a6d6",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Система задач (chains/tasks):** иерархическая. Каждая задача может содержать подзадачи. Пример: команда `game speedrun` → KillPlayerTask → подзадачи поиска и атаки. Команда `strike nick` транслируется в PunkCommand → KillPlayerTask.",
+    "content_len": 234
+  },
+  {
+    "chunk_id": 66,
+    "doc_id": "7fbfbfe1-710a-4672-8978-d17100e738a2",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Py4J Entry Point** — входная точка, связывающая Java и Python. Здесь прописаны все методы-мосты: пересылка чат-сообщений в Python, пересылка игровых событий (onDeath, onKill, onDamage). Используются Python-коллбэки: когда в игре происходит событие, Java вызывает соответствующий метод в Python.",
+    "content_len": 296
+  },
+  {
+    "chunk_id": 67,
+    "doc_id": "60b053a2-509a-432f-9a1f-2dc6fb7e6abf",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Определение смерти игрока** реализовано костылём: мод отслеживает HP каждого игрока. Если HP упало до 0 или резко стало 20 (игрок возродился) — считается, что игрок умер. Прямого API для этого в Minecraft нет (код залочен разработчиками). Миксины не решают эту проблему; через сетевые пакеты — уже читы.",
+    "content_len": 305
+  },
+  {
+    "chunk_id": 68,
+    "doc_id": "9b0d8e87-2140-4ccf-8177-f307b21d308e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Запуск Java-части для разработки:** клонировать репозиторий, открыть в VS Code (он подскажет нужные расширения для Java), запустить `gradle runClient`. Изменения вносятся в код → снова `gradle runClient`.",
+    "content_len": 206
+  },
+  {
+    "chunk_id": 69,
+    "doc_id": "dcaaac83-03c7-424f-b16a-bd32905b4a07",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### MindBridge — сборщик данных\n\nMindBridge — модуль в Python-части (DataCollector), который собирает все данные из Minecraft и конвертирует их в текстовый формат для цикла событий агента. Источники данных:",
+    "content_len": 206
+  },
+  {
+    "chunk_id": 70,
+    "doc_id": "c81196d7-4e2e-4c08-a384-40b00dc8dc4c",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "1. **Голосовые пакеты** — от voice chat, с привязкой к нику игрока (агент знает, кто говорит)\n2. **Серверные сообщения** — broadcast-сообщения сервера (менее приоритетны)\n3. **Сообщения игроков** — парсятся из чата с определением ника; парсер в Java-части, Python получает готовую структуру {ник: сообщение}\n4. **ЛС в Minecraft** — личные сообщения, отдельный формат парсинга\n5. **Игровые события** — смерть, убийство, урон → конвертируются в текст: «игрок X убит игроком Y»\n6. **Сообщения с Twitch/YouTube/Discord** — тоже попадают в общий цикл событий",
+    "content_len": 553
+  },
+  {
+    "chunk_id": 71,
+    "doc_id": "47b51743-297b-4e19-b0aa-52ca480b00ee",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Все данные конвертируются в единый текстовый формат и попадают в цикл событий (KTX Swarm).",
+    "content_len": 90
+  },
+  {
+    "chunk_id": 72,
+    "doc_id": "04e17332-a843-409b-8e8b-4e37697ec2f0",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Важно: парсинг чата зависит от конкретного сервера. На незнакомом сервере агент может не понимать сообщения. В мод-конфиге есть настройки под разные сервера для кастомизации парсинга.",
+    "content_len": 183
+  },
+  {
+    "chunk_id": 73,
+    "doc_id": "e8440a8e-55e7-4344-9043-d652c8aa66b1",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Цикл событий (KTX Swarm)\n\nKTX Swarm — структура, хранящая последние 100 объектов событий. Не все из них попадают в промпт — промпт-конструктор выбирает релевантные. Это основа контекста агента: он «видит» историю событий и на её основе принимает решения.",
+    "content_len": 258
+  },
+  {
+    "chunk_id": 74,
+    "doc_id": "d80e50d7-0c72-4f88-9f24-9177a4fa95c3",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Промпты и файл personalities.yml\n\nПромпты хранятся в `resources/personalities.yml`. Здесь описываются роли агента — это системный промпт для LLM.",
+    "content_len": 149
+  },
+  {
+    "chunk_id": 75,
+    "doc_id": "c51292f2-a393-402b-bdf4-944d64b63fd0",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Ключевые правила написания промптов для автономного агента:\n- Жёстко управлять вниманием модели (указывать, на что обращать внимание, на что нет)\n- Несколько раз повторять критичные инструкции (LLM может «забыть» при длинном контексте)\n- Примеры ответов — полезны, но LLM склонны их копировать дословно; нужно явно и многократно указать, что это ТОЛЬКО пример, не финальный ответ\n- В .env файле необходимо заменить ник на свой",
+    "content_len": 426
+  },
+  {
+    "chunk_id": 76,
+    "doc_id": "b1de6711-b4ce-40ee-bc6e-7ec4446bf2b7",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Система инструментов (tools)\n\nИнструменты — Python-функции в папке `agent_tools/`. Комментарии (docstrings) копируются агенту как описание инструмента. Название функции = название инструмента для агента. Описание в коде критично — оно прямо попадает в промпт.",
+    "content_len": 263
+  },
+  {
+    "chunk_id": 77,
+    "doc_id": "1595fdf5-84f4-4e15-8adb-c3843929f706",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Базовые инструменты:**\n- `speak(comment, emotion)` — сказать что-то (отправляет в TTS + чат Minecraft одновременно). Эмоция влияет на озвучку\n- `enter_yandere_mode` — переключение личности на «яндере-режим» (смена промпта). Вызывается через `!enter_yandere_mode` или через эмоцию «yandere» в speak\n- `minecraft_command` — выполнение команд в Minecraft (spawn, punch nick и т.д.)",
+    "content_len": 380
+  },
+  {
+    "chunk_id": 78,
+    "doc_id": "b8a4a192-9268-4c20-929d-40e1ec13df75",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Tool Status** — механизм динамического описания инструментов. Метод `{tool_name}_tool_status()` вызывается при каждой сборке промпта и возвращает текущий контекст (например, на каком сервере агент, какие команды доступны). Есть база серверов с описаниями команд под каждый.",
+    "content_len": 275
+  },
+  {
+    "chunk_id": 79,
+    "doc_id": "22f327bd-5691-414b-848b-8558b16c918e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Смарт-триггеры\n\nПроблема простого цикла (запуск LLM каждые 10 секунд): огромные задержки. Если агента убили сразу после очередного запуска — он отреагирует только через 10+ секунд ожидания + 3-10 секунд генерации = 20+ секунд задержки.",
+    "content_len": 239
+  },
+  {
+    "chunk_id": 80,
+    "doc_id": "0bd7887c-e725-4489-9ba9-6618cb7e8e5d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Решение — smart triggers.** Базовое ожидание ~10-15 секунд, но с приоритетными триггерами:\n- Сообщение в чате (особенно с упоминанием ника агента) → немедленный запуск\n- Смерть агента → немедленный запуск\n- Убийство игрока → немедленный запуск\n- Урон → триггер",
+    "content_len": 262
+  },
+  {
+    "chunk_id": 81,
+    "doc_id": "d35a26b2-9ad7-4cc0-a601-5805df5c6a9d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "При срабатывании триггера агент получает в промпте информацию о вызвавшем событии: «произошло такое-то событие, отреагируй прямо сейчас». Без триггера: «никаких событий не произошло». Это ключевой механизм, обеспечивающий релевантную и быструю реакцию агента.",
+    "content_len": 259
+  },
+  {
+    "chunk_id": 82,
+    "doc_id": "2cf45af4-bec0-409c-accb-a5f786b48c02",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Управление триггерами находится в reaction-агенте / planner-агенте.",
+    "content_len": 67
+  },
+  {
+    "chunk_id": 83,
+    "doc_id": "cc4309f8-91b3-4381-b5d4-c33d55ae5828",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### LiteLLM для смены моделей\n\nИспользуется LiteLLM через LangChain. Позволяет менять LLM-провайдера без изменения кода — достаточно изменить строку model_name в .env. Примеры: `openai/gpt-4`, `mistral/mistral-small-3.2`. Для каждого провайдера нужен соответствующий API-ключ в .env.",
+    "content_len": 283
+  },
+  {
+    "chunk_id": 84,
+    "doc_id": "9662626c-51a4-4c0e-8fb4-c2623620c581",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Почему не LangChain / LangGraph / SmolAgents\n\n**LangChain (агентная часть):** сложно парсить tool_calls, тяжело залезть во внутренности цикла агента. Для кастомизации промптов и формата инструментов — пытка. Нужно много патчей.",
+    "content_len": 231
+  },
+  {
+    "chunk_id": 85,
+    "doc_id": "7b89d8ea-f93c-4f0e-b397-8d4fd738a078",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**LangGraph:** ещё хуже — огромное количество бойлерплейт-кода для минимального функционала. Тяжело получить доступ к внутренностям, изменить параметры тулов.",
+    "content_len": 158
+  },
+  {
+    "chunk_id": 86,
+    "doc_id": "9ddc687b-9261-449e-b8e7-6c022821c258",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**SmolAgents (Hugging Face):** интересная идея — агент вызывает инструменты как Python-код (функции с параметрами). Но LLM начинают писать слишком сложный код (циклы, новые функции на 100 строк) вместо простого вызова инструментов. Нужен fine-tuning, а если fine-tuning — лучше сразу на командный формат.",
+    "content_len": 304
+  },
+  {
+    "chunk_id": 87,
+    "doc_id": "508c8efb-47af-4e25-b4fb-42ba91297fb6",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Вывод:** для автономного агента с бесконечным циклом (while true) все существующие фреймворки не подходят. Они заточены под задачу с конечным результатом. Проще написать свой pipeline: класс агента с методом run (while true), prompt-конструктор, парсер, вызов инструментов.",
+    "content_len": 275
+  },
+  {
+    "chunk_id": 88,
+    "doc_id": "e11d1ae2-882e-4677-8c22-78cd89c7271b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Практика\n\n### Запуск Docker-контейнеров\n\nВ папке `docker/filter/` запустить docker-compose — поднимутся контейнеры с фильтром и TTS (Fish Speech). TTS принимает HTTP-запросы от Python-скрипта и возвращает аудиофайлы.",
+    "content_len": 219
+  },
+  {
+    "chunk_id": 89,
+    "doc_id": "40cd7543-a759-4d89-a808-ede19146e32d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Работа с Java-частью\n\n1. Клонировать репозиторий мода\n2. Открыть в VS Code (установятся Java-расширения)\n3. `cd ваш_проект && gradle runClient` — запуск Minecraft с модом\n4. Для изменения поведения — редактировать Java-классы (например, KillPlayerTask) → пересобрать через `gradle runClient`\n5. Copilot/Claude Code помогут с Java-кодом",
+    "content_len": 339
+  },
+  {
+    "chunk_id": 90,
+    "doc_id": "8e3b4c7b-ed91-41f7-a61e-feb881a12bf1",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Настройка промптов\n\n1. Открыть `resources/personalities.yml`\n2. Заменить описание персонажа на своё\n3. В `.env` заменить ник на свой\n4. При написании примеров ответов — явно указать «это ПРИМЕР, не копировать дословно» (минимум 3-5 раз)",
+    "content_len": 240
+  },
+  {
+    "chunk_id": 91,
+    "doc_id": "e282700c-37d3-4e98-9f4b-f53bcf4001e1",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Смена LLM\n\nВ `.env` изменить переменную с названием модели: `model_name=mistral/mistral-small-3.2`. Добавить API-ключ провайдера. Перезапустить Python-скрипт.",
+    "content_len": 162
+  },
+  {
+    "chunk_id": 92,
+    "doc_id": "a38daea0-5fe4-4cfc-9c73-1cf903e2a7e2",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Инструменты и технологии\n\n- **Docker / docker-compose** — контейнеризация TTS и фильтра\n- **Fish Speech** — TTS-система, работает как HTTP-сервер в Docker; принимает текст + референс голоса → возвращает аудио\n- **Py4J** — Java↔Python мост через сетевое соединение\n- **MindBridge** — модуль сбора и конвертации данных из Minecraft (в Python-части, DataCollector)\n- **KTX Swarm** — структура цикла событий, хранит последние ~100 объектов\n- **LiteLLM** — универсальный клиент для LLM-провайдеров, позволяет менять модель одной строкой\n- **LangChain** — используется частично (LiteLLM через LangChain), но не агентная часть\n- **SmolAgents (Hugging Face)** — альтернативный агентный фреймворк, не используется в проекте из-за ограничений\n- **LangGraph** — граф-агентный фреймворк, не используется из-за избыточности кода\n- **Regex** — первый уровень фильтрации сообщений по корням слов\n- **Gradle** — система сборки для Java-части проекта",
+    "content_len": 936
+  },
+  {
+    "chunk_id": 93,
+    "doc_id": "a9691836-8727-4988-aeac-2fad2dc582ac",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Задания студентам\n\n1. Продолжить выполнение плана baseline: запуск Docker, настройка Minecraft, запуск Python-скрипта\n2. Изучить структуру проекта: `agent_tools/`, `resources/personalities.yml`, `.env`\n3. Попробовать изменить промпт персонажа и посмотреть результат\n4. Заходить на сервер, тестировать агентов",
+    "content_len": 311
+  },
+  {
+    "chunk_id": 94,
+    "doc_id": "223b9d94-7bac-4c1b-9a2b-2c21616898e8",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Ответы на вопросы студентов\n\n**В: Pipeline фильтрации быстро работает?**\nО: Regex-часть — быстро. Нейронные фильтры — медленнее, но всё равно быстрее генерации LLM. В сумме задержка от фильтрации незначительна на фоне общего pipeline.",
+    "content_len": 237
+  },
+  {
+    "chunk_id": 95,
+    "doc_id": "b5155043-3762-4dc3-b0b0-44e367e3a297",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**В: Почему бы не использовать лемматизацию (приведение к начальной форме) вместо regex?**\nО: Можно рассмотреть. Но regex решает задачу достаточно хорошо для текущих нужд, а лемматизация добавит зависимость от NLP-библиотек и может замедлить pipeline.",
+    "content_len": 251
+  },
+  {
+    "chunk_id": 96,
+    "doc_id": "f0687ca3-5271-4c89-8c16-bd24b812a3fe",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week2_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**В: Насколько сильно надо фильтровать выходные сообщения?**\nО: Зависит от платформы стриминга. Для Twitch: блокировать оскорбления меньшинств, политику, религию. Обычный мат — по желанию. Для собственной безопасности — блокировать политику и религию всегда.",
+    "content_len": 258
+  },
+  {
+    "chunk_id": 97,
+    "doc_id": "e9d156b7-c32f-45d4-bd9c-40a5613977bc",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "# Лекция 3 — База данных, память агента, инструменты и выбор LLM",
+    "content_len": 64
+  },
+  {
+    "chunk_id": 98,
+    "doc_id": "778754f2-a4f0-414d-9d68-c552994b26ee",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Ключевые темы\n\n- Система памяти агента: база данных SQLite/Postgres\n- Сохранение информации о пользователях (summary, rank)\n- Инструменты агента: детальный разбор tool system, tool_status\n- Рекомендуемые LLM для pipeline стримерши (CyaNemo Remix, Saiga Nemo)\n- Хак «Focus» — принудительное начало ответа для слабых LLM\n- Техника prefill (предзаполнение ответа) для улучшения работы агента\n- Непроизвольное расцензурирование LLM на агентном pipeline\n- Fine-tuning и RL для стримерши: текущий статус и сложности\n- Архитектура сервисов: вынос LLM на Mac, TTS на сервер\n- RAG для модных словечек (подмешивание актуальной лексики)\n- Производительность LLM на разных платформах (GPU vs Mac M4)",
+    "content_len": 690
+  },
+  {
+    "chunk_id": 99,
+    "doc_id": "454191e1-2721-448d-9052-eeea1296122b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Теория\n\n### Система памяти агента (база данных)\n\nАгент хранит информацию о пользователях в базе данных. В текущей реализации — SQLite (файл `data/natyan_database.sqlite`), в новой версии — Postgres (логика та же).",
+    "content_len": 216
+  },
+  {
+    "chunk_id": 100,
+    "doc_id": "4411db14-9435-4049-a81f-0759d8194c9e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Структура данных пользователя:**\n- **nick** — игровой ник\n- **summary** — текстовое описание игрока, составленное LLM (примеры из базы: «агрессивный соевый мальчик», «пубертатник»). LLM сама решает, как охарактеризовать игрока\n- **rank** — числовой рейтинг игрока (от 1 до 5), влияет на отношение агента",
+    "content_len": 305
+  },
+  {
+    "chunk_id": 101,
+    "doc_id": "3ff41150-4181-40c5-a683-3fe173780a33",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Просмотр базы:** скачать DB Browser for SQLite, открыть файл базы → таблица `users` → столбцы nick и summary.",
+    "content_len": 111
+  },
+  {
+    "chunk_id": 102,
+    "doc_id": "6351b668-8584-42e8-938f-26da16598d7a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Код базы данных:** модуль `database.py` содержит все методы обращения к базе. Класс базы инициализируется при старте и передаётся в инструменты (tools) через `ToolConfig`.",
+    "content_len": 173
+  },
+  {
+    "chunk_id": 103,
+    "doc_id": "1e8a4189-e4f3-4c41-af9b-a131105e6c90",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Механизм сохранения информации о пользователях",
+    "content_len": 50
+  },
+  {
+    "chunk_id": 104,
+    "doc_id": "45162217-49c7-41a0-8fd0-73f0a0bf6300",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**SaveUserInfoTool** — инструмент, который вызывает LLM, когда считает нужным запомнить что-то о пользователе. LLM передаёт ник и текстовое описание, которое сохраняется в поле summary базы данных.",
+    "content_len": 197
+  },
+  {
+    "chunk_id": 105,
+    "doc_id": "6e592f5b-6ab6-4ae5-8466-fae0852f2c8d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Like Tool** — простой инструмент для повышения ранга пользователя. LLM вызывает `like(nick)`, происходит обращение к базе: получить текущий rank → rank + 1 → сохранить. Ранг ограничен (максимум 5, минимум 1). Аналогично существует механизм понижения ранга.",
+    "content_len": 258
+  },
+  {
+    "chunk_id": 106,
+    "doc_id": "3b96b457-770a-410c-8422-b4ccbd45fd57",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Summary и rank передаются в промпт при каждой сборке (prompt constructor) — агент «помнит» всех пользователей, с которыми взаимодействовал.",
+    "content_len": 139
+  },
+  {
+    "chunk_id": 107,
+    "doc_id": "6eb9c708-bdce-44e9-9b9f-e9de7f415865",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Три части агента (детализация)\n\n1. **Сборка промпта (Prompt Constructor)** — папка `prompt_generation/`, файл prompt_constructor. Собирает всю информацию: личность, список игроков с summary из БД, текущие события, описания инструментов\n2. **Цикл агента** — метод `step()` в core-агенте, выполняется как `while True`. Каждый шаг: ожидание триггера → сборка промпта → вызов LLM → парсинг ответа → выполнение инструментов\n3. **Инструменты (Tools)** — Python-функции в папке `tools/`. ResponseParser (в ToolExecutor в старой архитектуре) парсит вывод LLM и вызывает соответствующие функции",
+    "content_len": 589
+  },
+  {
+    "chunk_id": 108,
+    "doc_id": "d3fb2dcb-b106-4205-9685-5cda6d4ecdee",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Tool Status — динамическое описание инструментов",
+    "content_len": 52
+  },
+  {
+    "chunk_id": 109,
+    "doc_id": "85a2488d-888c-42bf-bcfc-8fb9383bb2d1",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Для инструментов с переменным контекстом (например, Minecraft-команды зависят от сервера) создаётся метод `{tool_name}_tool_status()`. Этот метод автоматически вызывается при каждой сборке промпта и возвращает актуальное описание: на каком сервере агент, какие команды доступны.",
+    "content_len": 278
+  },
+  {
+    "chunk_id": 110,
+    "doc_id": "73d30b9d-abc5-4c6a-b11c-4df7e0f7ea12",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Существует база серверов Minecraft с описаниями (выживание, мини-игры и т.д.), чтобы агент понимал контекст каждого сервера. Потенциально можно автоматизировать переходы между серверами.",
+    "content_len": 186
+  },
+  {
+    "chunk_id": 111,
+    "doc_id": "5bfb6931-b420-45ad-a0d1-e71a6107e4cc",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Рекомендуемые LLM\n\nДля pipeline стримерши рекомендуются две модели (обе основаны на Mistral Nemo):\n1. **CyaNemo Remix i1** — лучший вариант\n2. **Saiga Nemo** — второй вариант, форк Mistral Nemo",
+    "content_len": 197
+  },
+  {
+    "chunk_id": 112,
+    "doc_id": "fd198ec1-3641-483c-98f7-f7aeb103679a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Обе модели 12B параметров, в квантизации Q4 весят ~7 ГБ. Хорошо держат роль стримерши, работают с обоими pipeline (core-agent и chat-agent).",
+    "content_len": 140
+  },
+  {
+    "chunk_id": 113,
+    "doc_id": "ef22ee57-0756-40b6-85c1-732e5e8a7d6c",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Qwen (все версии)** — плохо работают на pipeline стримерши. Часто выдают бессмыслицу, не следуют формату инструментов. Даже «разлоченные» (uncensored) версии Qwen с Hugging Face работают хуже: теряют в агентных способностях, становятся «скучнее» — возможно, нарушается качество при неквалифицированном снятии цензуры.",
+    "content_len": 319
+  },
+  {
+    "chunk_id": 114,
+    "doc_id": "51962c31-c7be-48d5-95ab-84647a1d92ee",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Gemma 3** — интересный случай: в обычном чате цензурирована, но на pipeline стримерши самопроизвольно расцензурируется (начинает материться). Предполагаемая причина: игровой контекст + большой промпт + множество инструментов создают ситуацию, выходящую за пределы обучения на безопасность.",
+    "content_len": 291
+  },
+  {
+    "chunk_id": 115,
+    "doc_id": "a81b2a0e-582b-41c7-a413-0eba0bee0e7e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Производительность LLM: Mac M4 vs GPU\n\nДля CyaNemo (12B, Q4):\n- **Mac M4** — генерация ~110 токенов/сек (быстрее GPU!), но prompt processing медленнее из-за особенностей объединённой памяти\n- **Nvidia 3090** — генерация ~70 токенов/сек, prompt processing ~3400 токенов\n- **Nvidia 4090** — prompt processing ~11000 токенов (в 2-3 раза быстрее 3090), генерация ~80-90 токенов/сек",
+    "content_len": 381
+  },
+  {
+    "chunk_id": 116,
+    "doc_id": "1ecd2fb9-8f6c-4b50-aeb7-713a5261d3c5",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Mac M4 (16 ГБ+) — отличное решение для запуска LLM-части pipeline: быстрая генерация, достаточная память. Оптимальная конфигурация: LLM на Mac, всё остальное (TTS, Minecraft, OBS) на основном ПК.",
+    "content_len": 195
+  },
+  {
+    "chunk_id": 117,
+    "doc_id": "902c52f0-1bdd-4ecb-87be-79b93101a814",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Важно:** TTS (Fish Speech) не запускается нормально на Mac — использует кастомные CUDA-ядра. STT тоже заточен под CUDA. Для Mac есть альтернативы: Simple TTS Server (плохое качество, нет интонаций), Kokoro (не тестировался).",
+    "content_len": 226
+  },
+  {
+    "chunk_id": 118,
+    "doc_id": "389ec871-530b-4727-aa7f-bc4bf5cbafa5",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Для выноса LLM на Mac: в .env заменить `localhost` на локальный IP Mac'а в сети. LLM запускается через LM Studio или аналог.",
+    "content_len": 124
+  },
+  {
+    "chunk_id": 119,
+    "doc_id": "6bd69a66-8d7e-4f8b-826a-28f67e355a1d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Хак «Focus» — принудительное начало ответа\n\nПроблема: слабые LLM вместо ответа от имени персонажа начинают «продолжать чат» — пишут новые ники, генерируют чужие сообщения, продолжают промпт вместо ответа на него.",
+    "content_len": 216
+  },
+  {
+    "chunk_id": 120,
+    "doc_id": "b6fa1149-2cd3-4d32-adf8-9f0f5c2ffb0b",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Решение:** в промпт добавляется незаконченное сообщение от имени агента. Добавляется ещё одно сообщение с ролью `assistant`, начинающееся с команды `focus` — «сфокусироваться на ответах юзерам, комментировании ситуаций». LLM видит это как уже начатый ответ и продолжает его, вместо того чтобы генерировать чужие сообщения.",
+    "content_len": 324
+  },
+  {
+    "chunk_id": 121,
+    "doc_id": "a878a129-cf7b-447c-8da2-98a218121fe6",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "Дополнительно: «не пиши привет» — потому что LLM постоянно начинала каждый ответ с приветствия.",
+    "content_len": 95
+  },
+  {
+    "chunk_id": 122,
+    "doc_id": "8dfad211-5b97-421c-9d62-18e9793e40ae",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Это глобальный лайфхак (техника prefill):**\n- Работает с большинством локальных LLM\n- Не работает с API-моделями (зависит от провайдера)\n- Не работает с reasoning-LLM (нужно имитировать reasoning-блок)\n- Можно использовать для любого агентного приложения: «Сейчас заполню анализ:» → LLM вынуждена заполнить анализ\n- Позволяет жёстко контролировать формат ответа",
+    "content_len": 363
+  },
+  {
+    "chunk_id": 123,
+    "doc_id": "a9092504-5b05-4d36-95c5-91977fba9e32",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Fine-tuning и RL для стримерши\n\n**Текущий статус:** fine-tuning для стримерши ни разу не делался. Идеально фантюнить: на формат ответов (командный формат инструментов) и на личность.",
+    "content_len": 186
+  },
+  {
+    "chunk_id": 124,
+    "doc_id": "69e09e1f-8cae-4f0a-9467-bfceaaf60913",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Идея RL в реальном времени:** зрители стрима дают обратную связь (лайк/дизлайк), LLM обучается в процессе. Эксперимент провалился — модель скатывалась к генерации одной буквы «а-а-а-а» или полной бессмыслице.",
+    "content_len": 210
+  },
+  {
+    "chunk_id": 125,
+    "doc_id": "cc20e467-b4d3-4fce-9432-1e57662c867e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Причины сложности RL:**\n- Одновременный инференс + обучение — противоречивые процессы\n- Нельзя использовать GGUF (квантизованные модели) — нужны SafeTensors\n- Обучение через Transformers/vLLM — медленнее, больше памяти\n- Backpropagation через всю модель — огромная нагрузка\n- RL сам по себе — тонкий, длительный процесс (недели/месяцы)",
+    "content_len": 337
+  },
+  {
+    "chunk_id": 126,
+    "doc_id": "412f84be-0013-4fb2-97cb-37ad934cd22e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Рекомендация:** начинать с минимального прототипа (кнопки +/-), проверить на маленькой модели, только потом масштабировать.",
+    "content_len": 125
+  },
+  {
+    "chunk_id": 127,
+    "doc_id": "c4296e90-eeee-4ca9-a835-62592ad15184",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**Сбор данных для будущего fine-tuning:** добавлена система сохранения в JSON для формирования датасета.",
+    "content_len": 104
+  },
+  {
+    "chunk_id": 128,
+    "doc_id": "428c4e32-e479-48aa-a8a8-f6e70fa52282",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### RAG для актуальной лексики\n\nВ pipeline встроен RAG, подмешивающий модные словечки в контекст агента. Если установлена соответствующая LLM (LM Studio), RAG автоматически подключается и обогащает словарный запас стримерши актуальным сленгом.",
+    "content_len": 243
+  },
+  {
+    "chunk_id": 129,
+    "doc_id": "56887134-03b7-4f47-aca5-409a6602f5db",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Практика\n\n### Просмотр базы данных агента\n\n1. Скачать DB Browser for SQLite\n2. Открыть файл `data/natyan_database.sqlite` (или аналогичный для вашего персонажа)\n3. Таблица `users` — посмотреть, какие summary LLM сохранила о игроках",
+    "content_len": 234
+  },
+  {
+    "chunk_id": 130,
+    "doc_id": "b323343a-37d4-4846-9d97-dc87b81e496a",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Создание нового инструмента\n\n1. Создать Python-функцию в папке `tools/`\n2. Написать говорящее название и подробный docstring (будет скопирован агенту)\n3. Если инструменту нужен динамический контекст — создать метод `{имя}_tool_status()` рядом\n4. Если инструмент работает с базой — импортировать db из ToolConfig",
+    "content_len": 315
+  },
+  {
+    "chunk_id": 131,
+    "doc_id": "5a043638-aa21-463a-85d8-b960dda38587",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Вынос LLM на Mac\n\n1. Установить LM Studio на Mac\n2. Загрузить CyaNemo Remix i1 (Q4 квантизация)\n3. Запустить сервер в LM Studio\n4. В .env на основном ПК заменить `localhost` на IP Mac'а в локальной сети\n5. LLM будет работать по сети, всё остальное — локально на ПК",
+    "content_len": 268
+  },
+  {
+    "chunk_id": 132,
+    "doc_id": "165e0b2c-e50d-4ea1-94dc-6df92edf450c",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "### Вынос TTS на удалённый сервер\n\nМожно перенести TTS на выделенный сервер: в endpoint TTS указать домен (например, `agcraft.ru`), открыть порты. TTS будет работать удалённо, уменьшая нагрузку на локальный ПК.",
+    "content_len": 210
+  },
+  {
+    "chunk_id": 133,
+    "doc_id": "cf876b82-af97-436f-9f16-249478348ce0",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Инструменты и технологии\n\n- **SQLite / Postgres** — база данных для хранения информации о пользователях (summary, rank)\n- **DB Browser for SQLite** — утилита для просмотра содержимого базы\n- **CyaNemo Remix i1** — рекомендуемая LLM для pipeline стримерши (12B, Mistral Nemo-based)\n- **Saiga Nemo** — альтернативная рекомендуемая LLM (12B, Mistral Nemo fork)\n- **LM Studio** — приложение для запуска локальных LLM (поддерживает GGUF, Mac M-чипы)\n- **Simple TTS Server** — простой TTS для Mac (низкое качество, без интонаций)\n- **Kokoro** — альтернативный TTS, потенциально работает на Mac\n- **Faster Whisper** — STT-система, используемая в pipeline (папка `data_collectors/stt/`)",
+    "content_len": 681
+  },
+  {
+    "chunk_id": 134,
+    "doc_id": "8c160341-01b7-4630-a6ad-2c11df2c2f3d",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Задания студентам\n\n1. Просмотреть базу данных своего агента — что он сохранил о игроках\n2. Попробовать разные LLM (CyaNemo, Saiga Nemo) — сравнить качество ответов\n3. Продолжить настройку и кастомизацию персонажа\n4. Если есть Mac — попробовать вынести LLM на него",
+    "content_len": 266
+  },
+  {
+    "chunk_id": 135,
+    "doc_id": "892b33b3-56dd-400c-8ed0-32c9fe959029",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "## Ответы на вопросы студентов\n\n**В: Какая модель используется для управления агентом сейчас?**\nО: CyaNemo Remix i1, развёрнутая локально на Mac M4 и доступная через локальную сеть.",
+    "content_len": 181
+  },
+  {
+    "chunk_id": 136,
+    "doc_id": "601d86cd-8b5c-4448-ab94-d29d0a69d6f5",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**В: Какие характеристики Mac нужны для нормальной работы?**\nО: Mac M4 с 16+ ГБ памяти. Модель 12B в Q4 квантизации весит ~7 ГБ. Генерация быстрее, чем на 3090 (110 vs 70 токенов/сек), но prompt processing медленнее.",
+    "content_len": 216
+  },
+  {
+    "chunk_id": 137,
+    "doc_id": "3fe0204e-b757-44f0-ae47-b0521640682e",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**В: Думал ли ты fine-tuning'ить LLM на конкретный характер?**\nО: Давно хочу, но не дошли руки. Идеально fine-tuning'ить на формат ответов и на личность. Началась работа по сбору данных в JSON для формирования датасета. RL в реальном времени пробовал — провалился (модель скатывается в бессмыслицу).",
+    "content_len": 299
+  },
+  {
+    "chunk_id": 138,
+    "doc_id": "64c22a6d-91ad-439f-9001-979a20f4a1dc",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**В: Какой TTS можно использовать на Mac?**\nО: Fish Speech плохо работает на Mac (CUDA-зависимость). Альтернативы: Simple TTS Server (низкое качество), Kokoro (не тестировался). Лучший вариант — вынести TTS на сервер или ПК с CUDA GPU.",
+    "content_len": 235
+  },
+  {
+    "chunk_id": 139,
+    "doc_id": "ad3e5427-45f1-4a4b-94a9-483400a2a8c0",
+    "source": "N:\\exam\\LocalLLMExperement\\AI-Professor-Tutor\\resources\\RAG\\course_materials\\week3_lecture.md",
+    "kind": "course_materials",
+    "subject": "",
+    "content": "**В: Почему зацензурированные LLM расцензурируются на pipeline стримерши?**\nО: Предполагаемые причины: игровой контекст выводит LLM за пределы обучения на безопасность; большой промпт с множеством инструментов; LLM «думает», что в игре можно больше, чем в чат-боте. Особенно заметно на Gemma 3.",
+    "content_len": 294
+  }
+]

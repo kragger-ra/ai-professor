@@ -126,6 +126,8 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv*
 .conda
 conda
@@ -209,3 +211,6 @@ lectures_16k/
 # User RAG packages — kept locally, README is tracked
 courses/*
 !courses/README.md
+
+# VKR research artifacts — keep eval data despite the global *.json ignore above
+!research/**/*.json
