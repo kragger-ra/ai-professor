@@ -42,7 +42,12 @@ def main() -> None:
 
     # --- RAG model (embeddings + FAISS index) ----------------------------
     log("app", "loading RAG model (embeddings + FAISS index)...")
-    rag = RagModel()
+    try:
+        rag = RagModel()
+    except Exception as exc:
+        log("app", f"RAG unavailable ({type(exc).__name__}: {exc}) — "
+                   f"is LM Studio running? continuing without course retrieval")
+        rag = None
 
     # --- worker threads --------------------------------------------------
     agent = AgentThread(input_q, tts_q, interrupt, rag)
@@ -51,7 +56,7 @@ def main() -> None:
         input_q,
         interrupt,
         tts_active=None,                       # Phase 3 wires real anti-echo
-        rag_vocab=rag.get_vocabulary(),
+        rag_vocab=(rag.get_vocabulary() if rag else set()),
         device_name=_capture_device(),
     )
 
