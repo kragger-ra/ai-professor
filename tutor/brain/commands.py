@@ -55,13 +55,17 @@ _MANNER_SIMPLER_RE = re.compile(
 )
 
 _MANNER_DETAILED_RE = re.compile(
-    r"(?:расскажи|объясни)\s+подробне[ей]"
-    r"|подробне[ей]\s+(?:расскажи|объясни)"
+    r"\bподробне[ей]"                                  # подробнее / подробней
+    r"|поподробн"                                      # поподробнее
+    r"|более\s+подробн"                                # более подробно
+    r"|(?:расскаж\w*|объясн\w*|говор\w*|рассказыва\w*)\s+подробн"
+    r"|подробн\w*\s+(?:расскаж|объясн|говор)"
+    r"|больше\s+(?:деталей|подробностей|примеров)"
+    r"|детальн"
+    r"|развёрнут|развернут"
     r"|строже"
-    r"|больше\s+деталей"
-    r"|академически"
-    r"|развёрнуто"
-    r"|развернуто",
+    r"|поглубже|\bглубже"
+    r"|академичн",
     re.IGNORECASE,
 )
 
@@ -76,6 +80,13 @@ _MANNER_DISPATCH = (
     (_MANNER_SIMPLER_RE,  "simpler",  "professor_simpler",  "Хорошо, объясню проще."),
     (_MANNER_DETAILED_RE, "detailed", "professor_detailed", "Хорошо, развёрнуто."),
     (_MANNER_NEUTRAL_RE,  "neutral",  "professor_neutral",  "Хорошо, как обычно."),
+)
+
+# Combined manner regex for the route table — single source of truth so the
+# routing test and the in-handler dispatch can never drift apart.
+_MANNER_ANY_RE = re.compile(
+    "|".join(f"(?:{rx.pattern})" for rx, *_ in _MANNER_DISPATCH),
+    re.IGNORECASE,
 )
 
 
@@ -336,6 +347,35 @@ def _handle_load_subject(agent: "AgentThread", utterance: str) -> None:
     _do_load_subject(agent, name, resolved, verb)
 
 
+# Bare "загрузи <name>" — a load verb directly followed by a course name,
+# without a "курс"/"предмет" noun. Routed ONLY when the name resolves to a
+# known course, so unrelated phrases ("включи свет") fall through to the LLM.
+_LOAD_BARE_RE = re.compile(
+    rf"^\s*(?P<verb>{_LOAD_VERBS})\s+(?P<name>\S.*?)\s*[.!?]*\s*$",
+    re.IGNORECASE,
+)
+
+
+def _bare_load_guard(utterance: str) -> bool:
+    m = _LOAD_BARE_RE.match(utterance.strip())
+    if not m:
+        return False
+    return _resolve_course_by_name(m.group("name")) is not None
+
+
+def _handle_load_bare(agent: "AgentThread", utterance: str) -> None:
+    """Load a course named right after the verb ('загрузи вайб-кодинг')."""
+    m = _LOAD_BARE_RE.match(utterance.strip())
+    if not m:
+        return
+    name = m.group("name").strip().rstrip(".!?,")
+    resolved = _resolve_course_by_name(name)
+    if resolved is None:
+        return
+    log(_COMPONENT, f"bare load resolved: name={name!r} -> {resolved!r}")
+    _do_load_subject(agent, name, resolved, m.group("verb").lower())
+
+
 # ---------------------------------------------------------------------------
 # LIST COURSES
 # ---------------------------------------------------------------------------
@@ -552,20 +592,8 @@ _ROUTE_TABLE = (
     # Phase 5 (active) - first match wins.
 
     # 1. Manner switch - utterance length guard applied alongside the regex.
-    (
-        re.compile(
-            r"расскажи\s+проще|поп?рощ[еауы]|короче|простыми\s+словами"
-            r"|объясни\s+проще"
-            r"|(?:расскажи|объясни)\s+подробне[ей]"
-            r"|подробне[ей]\s+(?:расскажи|объясни)"
-            r"|строже|больше\s+деталей|академически|развёрнуто|развернуто"
-            r"|как\s+обычно|нормально\s+говори|нейтрально",
-            re.IGNORECASE,
-        ),
-        lambda u: len(u) < 120,
-        _handle_manner,
-    ),
-    # 2. Course load - long, bare, and short forms (handler dispatches internally)
+    (_MANNER_ANY_RE, lambda u: len(u) < 120, _handle_manner),
+    # 2. Course load - long / short / bare-with-noun forms.
     (
         re.compile(
             rf"(?:{_LOAD_VERBS})\s+(?:{_SUBJECT_NOUNS})",
@@ -580,6 +608,9 @@ _ROUTE_TABLE = (
         lambda u: True,
         _handle_list_courses,
     ),
+    # 4. Bare course load - "загрузи <name>" with no noun; the guard confirms
+    #    the spoken name resolves to a real course before routing.
+    (_LOAD_BARE_RE, _bare_load_guard, _handle_load_bare),
 
     # Phase 6 (dormant) - _handle_profile_query and _handle_session_summary
     # are defined above but intentionally NOT routed yet: profile queries
