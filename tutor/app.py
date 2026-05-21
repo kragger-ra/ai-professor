@@ -80,6 +80,9 @@ def main() -> None:
         log("app", "shutting down")
     finally:
         capture.stop()
+        # Capture this final session into cross-session memory before exit.
+        log("app", "persisting session memory...")
+        agent.persist_memory()
         agent.stop()
         playback.stop()
 

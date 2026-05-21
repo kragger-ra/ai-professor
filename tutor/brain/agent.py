@@ -15,7 +15,11 @@ Per student utterance the agent routes:
 Generation runs in its own thread and always completes into the `Answer`
 object, so a resume just re-voices stored, finished text — instant, no LLM.
 
-Still stubbed for later phases: cross-session memory + profiles (Phase 6).
+PHASE 6 — cross-session memory. A brief thesis-level summary of past
+sessions is loaded on startup and injected into every system prompt, so the
+professor can reference earlier work ("в прошлый раз мы разбирали..."). The
+summary is refreshed off the answer's critical path: a daemon thread every
+6 student turns, plus once on shutdown via persist_memory().
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ from tutor.brain.answer import MAX_STACK_DEPTH, Answer, AnswerStack
 from tutor.brain.llm import stream_response_sentences
 from tutor.brain.prompt import PROFESSOR_GOAL, construct_prompt, create_chat_from_prompt
 from tutor.brain.rag import RagModel
+from tutor.brain.session_memory import SessionMemory
 from tutor.util import log
 
 RESPONSE_MAX_TOKENS = 400
@@ -39,6 +44,7 @@ MINILECTURE_MAX_TOKENS = 900      # bigger budget for a confirmed mini-lecture
 META_TIMEOUT_S = 4.0              # cap how long an answer waits on the meta-agent
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
+MEMORY_REFRESH_EVERY_TURNS = 6    # refresh cross-session memory this often
 
 # Answer length and vocabulary are NOT pre-computed here — the main LLM
 # adapts its own style from the conversation (see PROFESSOR_GOAL). The agent
@@ -121,6 +127,9 @@ class AgentThread(threading.Thread):
         self._personality = DEFAULT_PERSONALITY
         self._manner = "simpler"          # tracked style; switched by voice command
         self._history: list[dict] = []
+        # Cross-session memory — loads the past-sessions summary from disk.
+        self._memory = SessionMemory()
+        self._student_turns = 0           # counts questions for the refresh cadence
         self._stack = AnswerStack()
         # A proactively spoken offer awaiting a yes/no:
         #   {"type": "return"} | {"type": "deferred", "question": str}
@@ -309,6 +318,7 @@ class AgentThread(threading.Thread):
             student_profile="",
             meta_instruction=meta_instruction,
             rag_score=rag_score,
+            past_sessions=self._memory.as_prompt_section(),
         )
         messages = create_chat_from_prompt(system_prompt, role="system")
         messages += self._history_messages()
@@ -334,6 +344,12 @@ class AgentThread(threading.Thread):
             daemon=True, name="generate",
         ).start()
         self._tts_q.put(answer)
+
+        # Cross-session memory: every few student turns refresh the running
+        # summary in the background — never on the answer's critical path.
+        self._student_turns += 1
+        if self._student_turns % MEMORY_REFRESH_EVERY_TURNS == 0:
+            self._spawn_memory_refresh()
 
     def _generate(self, answer: Answer, messages: list,
                   max_tokens: int) -> None:
@@ -436,6 +452,38 @@ class AgentThread(threading.Thread):
             return h["content"]
         ans = h.get("answer")
         return " ".join(ans.sentences).strip() if ans else ""
+
+    # ------------------------------------------------------------------
+    # Cross-session memory
+    # ------------------------------------------------------------------
+
+    def _spawn_memory_refresh(self) -> None:
+        """Refresh + save the session summary on a daemon thread.
+
+        Snapshots the history so the worker is not affected by later turns.
+        Errors are swallowed inside SessionMemory — this never breaks a turn.
+        """
+        history_snapshot = list(self._history)
+
+        def _worker() -> None:
+            try:
+                self._memory.refresh(history_snapshot)
+                self._memory.save()
+            except Exception as exc:
+                log("agent", f"memory refresh failed: "
+                             f"{type(exc).__name__}: {exc}")
+
+        threading.Thread(target=_worker, daemon=True,
+                          name="memory-refresh").start()
+
+    def persist_memory(self) -> None:
+        """Refresh + save the session summary synchronously (for shutdown)."""
+        try:
+            self._memory.refresh(list(self._history))
+            self._memory.save()
+        except Exception as exc:
+            log("agent", f"persist_memory failed: "
+                         f"{type(exc).__name__}: {exc}")
 
     def _rag_lookup(self, query: str) -> tuple[str, float]:
         if self._rag is None:

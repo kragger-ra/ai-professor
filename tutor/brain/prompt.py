@@ -80,6 +80,7 @@ def construct_prompt(
     student_profile: str = "",
     meta_instruction: str = "",
     rag_score: float = 0.0,
+    past_sessions: str = "",
 ) -> str:
     """Build system prompt from personality template + RAG + student context.
 
@@ -89,6 +90,7 @@ def construct_prompt(
         student_profile:  Pre-formatted profile string from StudentProfileManager.
         meta_instruction: Short directive from the meta-agent.
         rag_score:        L2 distance from FAISS (lower = more relevant).
+        past_sessions:    Thesis-level summary of earlier sessions (may be empty).
     """
     system_template = _load_personality(personality_key)
     # Substitute {COURSE_*} placeholders with the active course config.
@@ -113,10 +115,16 @@ def construct_prompt(
     student_section = (
         "\n\n## Профиль студента:\n" + student_profile if student_profile else ""
     )
+    past_sessions_section = (
+        "\n\n## Из прошлых занятий:\n" + past_sessions
+        + "\n(Можешь ссылаться на это: «в прошлый раз мы разбирали...»)"
+        if past_sessions else ""
+    )
     meta_section = (
         "\n\n## Стиль текущего ответа:\n" + meta_instruction if meta_instruction else ""
     )
-    return system_template + final_rag_context + student_section + meta_section
+    return (system_template + final_rag_context + student_section
+            + past_sessions_section + meta_section)
 
 
 def create_chat_from_prompt(prompt: str, role: str = "system") -> List[Dict]:
