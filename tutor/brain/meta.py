@@ -227,7 +227,7 @@ def build_meta_instruction(meta: dict, student_known: bool = True) -> str:
     # Comprehension level → depth
     level = meta.get("level", 3)
     if level <= 2:
-        parts.append("Уровень понимания низкий — разбей объяснение на 1-2 предложения и спроси понял ли.")
+        parts.append("Уровень понимания низкий — объясняй просто и короткими предложениями, без жаргона.")
     elif level >= 4:
         parts.append("Уровень понимания высокий — не упрощай, можно техническими терминами.")
 

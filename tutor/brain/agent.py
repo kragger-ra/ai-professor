@@ -81,6 +81,14 @@ _NESTED_RULE = (
 _CONTINUE_RE = re.compile(r"продолж|дальше|договор|поехали", re.IGNORECASE)
 # "Return" — step one level back up the stack, to the parent answer.
 _RETURN_RE = re.compile(r"верн[иёе]|назад|обратно", re.IGNORECASE)
+# Bare acknowledgement — the whole utterance is just yes/ok filler. With no
+# pending offer it is NOT a question and must not clear the answer stack.
+_ACK_TOKEN = (r"да|ага|угу|окей|ок|хорошо|ладно|понятно|понятненько|ясно|"
+              r"конечно|договорились|давай|давайте|спасибо|ну|вот|я|это|"
+              r"всё|все|уже|понял|поняла|поняли")
+_ACK_RE = re.compile(
+    rf"^[\s,.!?\-—]*(?:(?:{_ACK_TOKEN})[\s,.!?\-—]*){{1,5}}$", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\b(не|нет|ни)\b", re.IGNORECASE)
 _YES_RE = re.compile(r"\bда\b|давай|конечно|ага|хочу|разбер|продолж|верн[иёе]",
                      re.IGNORECASE)
 _NO_RE = re.compile(r"\bнет\b|не\s+надо|не\s+нужно|потом|позже|не\s+хочу",
@@ -201,6 +209,17 @@ class AgentThread(threading.Thread):
             self._handle_return()
             return
 
+        # Bare acknowledgement ("да", "давайте", "понятно") — not a question.
+        # It must not clear the stack: continue the current answer if one is
+        # live, otherwise ignore it.
+        if self._is_acknowledgement(utterance):
+            if self._stack.depth > 0:
+                log("agent", f"acknowledgement — continuing: {utterance!r}")
+                self._handle_continue()
+            else:
+                log("agent", f"acknowledgement — nothing to do: {utterance!r}")
+            return
+
         # Mini-lecture request — confirm before launching a long answer.
         if self._is_minilecture_request(utterance):
             self._offer = {"type": "minilecture", "question": utterance}
@@ -235,6 +254,16 @@ class AgentThread(threading.Thread):
     def _is_return(utterance: str) -> bool:
         u = utterance.strip()
         return len(u) < 40 and bool(_RETURN_RE.search(u))
+
+    @staticmethod
+    def _is_acknowledgement(utterance: str) -> bool:
+        """The whole utterance is bare yes/ok filler — not a question."""
+        u = utterance.strip()
+        if not u or len(u) > 35:
+            return False
+        if _NEGATION_RE.search(u):
+            return False               # "не понял", "нет" — not acknowledgement
+        return bool(_ACK_RE.fullmatch(u))
 
     @staticmethod
     def _is_yes(utterance: str) -> bool:
