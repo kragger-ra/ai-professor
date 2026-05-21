@@ -378,6 +378,9 @@ class AgentThread(threading.Thread):
             target=self._generate, args=(answer, messages, max_tokens),
             daemon=True, name="generate",
         ).start()
+        # A noise blip may have set the interrupt while meta/RAG/LLM ran —
+        # clear it so playback does not drop this freshly-built answer.
+        self._interrupt.clear()
         self._tts_q.put(answer)
 
         # Cross-session memory: every few student turns refresh the running

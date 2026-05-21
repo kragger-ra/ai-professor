@@ -295,13 +295,22 @@ class CaptureThread(threading.Thread):
                                     stt_accumulator = []
                                     log("capture", f"utterance: '{full_text}'")
                                     self._input_q.put((full_text, was_interruption))
-                                elif was_interruption:
-                                    # Interrupt halted playback but STT got
-                                    # nothing usable (cough / noise). Tell the
-                                    # agent to resume the cut-off answer.
-                                    log("capture",
-                                        "interruption, no transcript - resume signal")
-                                    self._input_q.put(("", was_interruption))
+                                else:
+                                    # No usable transcript (cough / noise /
+                                    # backchannel). The speech onset already
+                                    # fired the interrupt Event — clear it, else
+                                    # a false blip stays stuck SET and playback
+                                    # drops every following answer.
+                                    self._interrupt.clear()
+                                    if was_interruption:
+                                        # An answer was mid-playback — ask the
+                                        # agent to resume the cut-off answer.
+                                        log("capture", "interruption, no "
+                                            "transcript - resume signal")
+                                        self._input_q.put(("", was_interruption))
+                                    else:
+                                        log("capture",
+                                            "false blip - interrupt cleared")
                                 speech_buffer.clear()
         except Exception as exc:
             log("capture", f"error: {exc}")
