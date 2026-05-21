@@ -5,7 +5,8 @@ PHASE 5 — adaptive layer: register drift, length tuning, mini-lecture.
 Per student utterance the agent routes:
   * a pending offer ("вернёмся к…?" / "разобрать отложенный вопрос?")
     -> "да" accepts, anything else declines;
-  * a resume phrase ("продолжай" / "вернёмся") -> re-voice from memory, no LLM;
+  * "продолжай" -> finish the current answer; "вернёмся"/"назад" -> step
+    back up to the parent answer — both re-voiced from memory, no LLM;
   * a question while an answer is in progress -> nest it under the current
     answer, UNLESS the stack is already 3 deep — then refuse with a fixed
     phrase and PARK the question (it resurfaces when the stack unwinds);
@@ -66,7 +67,10 @@ _MINILECTURE_RULE = (
     "списков, не дроби на крошечные реплики."
 )
 
-_RESUME_RE = re.compile(r"продолж|верн[иёе]|дальше|поехали", re.IGNORECASE)
+# "Continue" — finish voicing the CURRENT answer (it was cut off mid-way).
+_CONTINUE_RE = re.compile(r"продолж|дальше|договор|поехали", re.IGNORECASE)
+# "Return" — step one level back up the stack, to the parent answer.
+_RETURN_RE = re.compile(r"верн[иёе]|назад|обратно", re.IGNORECASE)
 _YES_RE = re.compile(r"\bда\b|давай|конечно|ага|хочу|разбер|продолж|верн[иёе]",
                      re.IGNORECASE)
 _NO_RE = re.compile(r"\bнет\b|не\s+надо|не\s+нужно|потом|позже|не\s+хочу",
@@ -155,7 +159,7 @@ class AgentThread(threading.Thread):
             offer, self._offer = self._offer, None
             if self._is_yes(utterance):
                 if offer["type"] == "return":
-                    self._handle_resume()
+                    self._handle_return()
                 elif offer["type"] == "minilecture":
                     self._answer_question(offer["question"], nested=False,
                                           long=True)
@@ -177,9 +181,14 @@ class AgentThread(threading.Thread):
             log("agent", "stop command — staying silent")
             return
 
-        # Resume command — re-voice from memory, no LLM.
-        if self._is_resume(utterance) and self._stack.depth > 0:
-            self._handle_resume()
+        # Continue — finish voicing the current answer, no LLM.
+        if self._stack.depth > 0 and self._is_continue(utterance):
+            self._handle_continue()
+            return
+
+        # Return — step back up to the parent answer, no LLM.
+        if self._stack.depth > 0 and self._is_return(utterance):
+            self._handle_return()
             return
 
         # Mini-lecture request — confirm before launching a long answer.
@@ -207,9 +216,15 @@ class AgentThread(threading.Thread):
             return
         self._answer_question(utterance, nested=nested)
 
-    def _is_resume(self, utterance: str) -> bool:
+    @staticmethod
+    def _is_continue(utterance: str) -> bool:
         u = utterance.strip()
-        return len(u) < 40 and bool(_RESUME_RE.search(u))
+        return len(u) < 40 and bool(_CONTINUE_RE.search(u))
+
+    @staticmethod
+    def _is_return(utterance: str) -> bool:
+        u = utterance.strip()
+        return len(u) < 40 and bool(_RETURN_RE.search(u))
 
     @staticmethod
     def _is_yes(utterance: str) -> bool:
@@ -323,26 +338,36 @@ class AgentThread(threading.Thread):
     # Resume + proactive offers
     # ------------------------------------------------------------------
 
-    def _handle_resume(self) -> None:
-        """Re-voice from memory. depth>=2 pops up to the parent; depth==1
-        just continues the current answer. Never calls the LLM."""
+    def _handle_continue(self) -> None:
+        """Finish voicing the CURRENT answer from where it was cut off.
+        Stack depth is unchanged. Never calls the LLM."""
         cur = self._stack.current
         if cur is None:
             return
-        if self._stack.depth >= 2:
-            target = self._stack.pop()    # drop the finished top, return parent
-            bridge = _RESUME_BRIDGE
-        else:
-            target = cur                  # continue the only answer
-            bridge = _CONTINUE_BRIDGE
-        if target is None:
-            return
         self._offered_for = None
-        if not target.unvoiced and not target.generating:
-            log("agent", "resume requested but nothing left to voice")
+        if not cur.unvoiced and not cur.generating:
+            log("agent", "continue requested but nothing left to voice")
             return
-        self._voice(bridge, target)
-        log("agent", f"resumed — stack depth {self._stack.depth}")
+        self._voice(_CONTINUE_BRIDGE, cur)
+        log("agent", f"continued — stack depth {self._stack.depth}")
+
+    def _handle_return(self) -> None:
+        """Step one level back up the stack and re-voice the parent answer.
+        At the root there is nothing above — fall back to continue. No LLM."""
+        if self._stack.depth < 2:
+            self._handle_continue()
+            return
+        parent = self._stack.pop()        # drop current top, return the parent
+        self._offered_for = None
+        if parent is None:
+            return
+        if not parent.unvoiced and not parent.generating:
+            log("agent", f"returned — parent already fully voiced, "
+                         f"stack depth {self._stack.depth}")
+            self._speak_line(_RESUME_BRIDGE)
+            return
+        self._voice(_RESUME_BRIDGE, parent)
+        log("agent", f"returned — stack depth {self._stack.depth}")
 
     def _maybe_offer(self) -> None:
         """When a (sub-)answer has finished voicing, proactively offer the
