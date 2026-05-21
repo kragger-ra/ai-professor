@@ -23,7 +23,6 @@ import concurrent.futures
 import queue
 import re
 import threading
-import time
 import traceback
 
 from tutor.brain import meta as meta_agent
@@ -48,9 +47,10 @@ _YES_RE = re.compile(r"\bда\b|давай|конечно|ага|хочу|раз
 _NO_RE = re.compile(r"\bнет\b|не\s+надо|не\s+нужно|потом|позже|не\s+хочу",
                     re.IGNORECASE)
 
-# A stray interrupt with no follow-up utterance (a cough): auto-resume the
-# unfinished answer after this idle gap.
-_AUTO_RESUME_AFTER_S = 2.0
+# Stop commands — playback is already halted by the interrupt Event; the
+# agent must simply NOT generate a reply.
+_STOP_RE = re.compile(r"^\s*(стоп|стой|хватит|тихо|молчи|помолчи|подожди|погоди)\b",
+                      re.IGNORECASE)
 
 _RESUME_BRIDGE = "Возвращаемся к тому, о чём говорили."
 _CONTINUE_BRIDGE = "Продолжаю."
@@ -74,7 +74,6 @@ class AgentThread(threading.Thread):
         self._personality = DEFAULT_PERSONALITY
         self._history: list[dict] = []
         self._stack = AnswerStack()
-        self._interrupt_seen_at: float | None = None
         # A proactively spoken offer awaiting a yes/no:
         #   {"type": "return"} | {"type": "deferred", "question": str}
         self._offer: dict | None = None
@@ -93,11 +92,9 @@ class AgentThread(threading.Thread):
             try:
                 item = self._input_q.get(timeout=0.3)
             except queue.Empty:
-                self._maybe_auto_resume()
                 self._maybe_offer()
                 continue
             utterance, was_interruption = item
-            self._interrupt_seen_at = None
             self._interrupt.clear()
             log("agent", f"handling: {utterance!r} (interruption={was_interruption})")
             try:
@@ -124,6 +121,12 @@ class AgentThread(threading.Thread):
                 log("agent", "offer declined")
                 return
             # neither yes nor no — a new question; drop the offer, handle below.
+
+        # Stop command — playback is already halted by the interrupt Event;
+        # the agent simply stays silent (generates no reply).
+        if len(utterance) < 25 and _STOP_RE.search(utterance):
+            log("agent", "stop command — staying silent")
+            return
 
         # Resume command — re-voice from memory, no LLM.
         if self._is_resume(utterance) and self._stack.depth > 0:
@@ -263,24 +266,6 @@ class AgentThread(threading.Thread):
         if parked:
             self._offer = {"type": "deferred", "question": parked}
             self._speak_line(f"Ты ещё спрашивал: «{parked[:70]}». Разобрать его?")
-
-    def _maybe_auto_resume(self) -> None:
-        """Stray interrupt with no follow-up (a cough) — re-voice the
-        unfinished current answer after a short wait."""
-        if not self._interrupt.is_set():
-            self._interrupt_seen_at = None
-            return
-        if self._interrupt_seen_at is None:
-            self._interrupt_seen_at = time.time()
-            return
-        if time.time() - self._interrupt_seen_at < _AUTO_RESUME_AFTER_S:
-            return
-        self._interrupt_seen_at = None
-        self._interrupt.clear()
-        cur = self._stack.current
-        if cur is not None and not cur.fully_voiced:
-            log("agent", "stray interrupt — auto-resuming current answer")
-            self._voice(_CONTINUE_BRIDGE, cur)
 
     # ------------------------------------------------------------------
     # Helpers

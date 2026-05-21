@@ -290,10 +290,25 @@ _BARE_EMOTION_TAIL_RE = re.compile(
 )
 
 
+# Emojis / pictographs — Vosk would try to vocalize them. Strip outright.
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"   # emoticons, pictographs, symbols (extended)
+    "\U00002600-\U000027BF"   # misc symbols + dingbats
+    "\U00002190-\U000021FF"   # arrows
+    "\U00002B00-\U00002BFF"   # misc symbols and arrows
+    "\U0000FE00-\U0000FE0F"   # variation selectors
+    "\U0001F1E6-\U0001F1FF"   # regional indicators
+    "]+",
+    flags=re.UNICODE,
+)
+
+
 def _scrub(sentence: str) -> str:
-    """Remove inline orchestration markers (emotion tags; skeleton dropped)."""
+    """Remove inline orchestration markers (emotion tags, emojis)."""
     cleaned = _EMOTION_TAG_RE.sub(" ", sentence)
     cleaned = _BARE_EMOTION_TAIL_RE.sub("", cleaned)
+    cleaned = _EMOJI_RE.sub("", cleaned)
     return cleaned.strip()
 
 

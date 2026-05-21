@@ -36,13 +36,9 @@ echo       WARNING: LM Studio (:22227) not responding - RAG will be
 echo                unavailable. Start LM Studio with the bge-m3 model.
 
 :launch
-echo.
-echo ============================================================
-echo   AI Professor Tutor v2 is running.
-echo   - You will HEAR a readiness signal when it starts listening.
-echo   - Full log: tutor_v2.log
-echo   - Keep this window open. Press Ctrl+C here to stop.
-echo ============================================================
+echo [2/2] Starting AI Professor Tutor v2 - live log below.
+echo       Listen for the readiness signal. Press Ctrl+C here to stop.
+echo       A copy of this log is also saved to tutor_v2.log
 echo.
 set PYTHONIOENCODING=utf-8
-.venv\Scripts\python.exe -m tutor.app > tutor_v2.log 2>&1
+.venv\Scripts\python.exe -m tutor.app
