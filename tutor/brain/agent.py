@@ -35,6 +35,7 @@ from tutor.util import log
 
 QA_MAX_SENTENCES = 4              # default answer cap; tuned 2..8 at runtime
 RESPONSE_MAX_TOKENS = 400
+NESTED_MAX_TOKENS = 220           # a nested clarification stays short (2-3 sentences)
 MINILECTURE_MAX_TOKENS = 900      # bigger budget for a confirmed mini-lecture
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
@@ -65,6 +66,15 @@ _MINILECTURE_RULE = (
     "Это мини-лекция: раскрой тему развёрнуто и по порядку — что это такое, "
     "как работает, пример, типичные ошибки. Говори голосом, без маркеров "
     "списков, не дроби на крошечные реплики."
+)
+
+# A nested answer is a quick clarification asked mid-explanation — keep it
+# tight (2-3 sentences) so the student does not lose the main thread.
+_NESTED_RULE = (
+    "Это короткий уточняющий вопрос, заданный посреди другого объяснения. "
+    "Ответь сжато — максимум 3 предложения, лучше 2: дай определение и одно "
+    "пояснение. Без длинных примеров и без углубления — студент должен "
+    "быстро вернуться к основной мысли."
 )
 
 # "Continue" — finish voicing the CURRENT answer (it was cut off mid-way).
@@ -263,8 +273,15 @@ class AgentThread(threading.Thread):
         # Drift the speaking register + answer-length cap toward the student.
         self._apply_calibration(meta_result)
 
-        style_rule = (_MINILECTURE_RULE if long
-                      else _length_rule(self._max_sentences))
+        # mini-lecture: long; nested: a quick mid-explanation clarification,
+        # forced short so the main thread is not lost; fresh: the tuned cap.
+        if long:
+            style_rule, max_tokens = _MINILECTURE_RULE, MINILECTURE_MAX_TOKENS
+        elif nested:
+            style_rule, max_tokens = _NESTED_RULE, NESTED_MAX_TOKENS
+        else:
+            style_rule = _length_rule(self._max_sentences)
+            max_tokens = RESPONSE_MAX_TOKENS
         register_rule = _REGISTER_RULES.get(self._register, "")
         meta_instruction = " ".join(p for p in (
             style_rule, register_rule,
@@ -286,10 +303,9 @@ class AgentThread(threading.Thread):
             self._stack.clear()           # fresh top-level question
         self._stack.push(answer)          # _handle already checked the cap
         self._offered_for = None
-        log("agent", f"answering ({'nested' if nested else 'fresh'}"
-                     f"{', mini-lecture' if long else ''}) — depth "
-                     f"{self._stack.depth}, register {self._register}, "
-                     f"cap {self._max_sentences}")
+        mode = "mini-lecture" if long else ("nested" if nested else "fresh")
+        log("agent", f"answering ({mode}) — depth {self._stack.depth}, "
+                     f"register {self._register}, max_tokens {max_tokens}")
 
         # History in chronological order; the assistant entry keeps a live
         # reference to the Answer so its text fills in as generation streams.
@@ -297,7 +313,6 @@ class AgentThread(threading.Thread):
         self._history.append({"role": "assistant", "answer": answer})
 
         # Generation runs in its own thread — always completes into `answer`.
-        max_tokens = MINILECTURE_MAX_TOKENS if long else RESPONSE_MAX_TOKENS
         threading.Thread(
             target=self._generate, args=(answer, messages, max_tokens),
             daemon=True, name="generate",
