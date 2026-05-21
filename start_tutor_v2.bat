@@ -4,12 +4,15 @@ title AI Professor (Tutor v2)
 cd /d "%~dp0"
 
 rem ============================================================
-rem  Tutor v2 launcher - starts the Vosk TTS server, then the
-rem  single-process tutor app (python -m tutor.app).
+rem  Tutor v2 launcher - kills any previous instance, starts the
+rem  Vosk TTS server, then the single-process tutor app.
 rem  LM Studio (RAG embeddings, :22227) is a separate prerequisite.
 rem ============================================================
 
-echo [1/2] Vosk TTS server...
+echo [1/3] Stopping any previous tutor instance (prevents duplicated audio)...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"name='python.exe'\" | Where-Object { $_.CommandLine -like '*tutor.app*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+
+echo [2/3] Vosk TTS server...
 curl -s -o nul --max-time 1 http://localhost:22232/health
 if not errorlevel 1 goto vosk_running
 powershell -NoProfile -Command "Start-Process -WindowStyle Minimized -FilePath 'scripts\_run_vosk_tts.bat'"
@@ -36,7 +39,7 @@ echo       WARNING: LM Studio (:22227) not responding - RAG will be
 echo                unavailable. Start LM Studio with the bge-m3 model.
 
 :launch
-echo [2/2] Starting AI Professor Tutor v2 - live log below.
+echo [3/3] Starting AI Professor Tutor v2 - live log below.
 echo       Listen for the readiness signal. Press Ctrl+C here to stop.
 echo       A copy of this log is also saved to tutor_v2.log
 echo.

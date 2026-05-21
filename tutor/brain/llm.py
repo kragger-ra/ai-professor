@@ -22,11 +22,15 @@ FAST_MODEL = os.getenv("CORE_LLM_MODEL_NAME", "mistral/mistral-large-latest")
 
 USE_LOCAL_LLM = os.getenv("USE_LOCAL_LLM", "false").lower() in ("true", "1", "yes")
 
-STREAM_TOKEN_TIMEOUT_S = 7   # per-chunk idle in queue.get
-MAX_STREAM_TIME_S = 30       # wall-clock max — separate timer thread enforces this
-                              # even if litellm's HTTP recv hangs and our in-loop
-                              # checks never fire (incident 2026-05-17: process sat
-                              # dead for 3+ minutes on a long Q&A).
+STREAM_TOKEN_TIMEOUT_S = 7   # per-chunk idle in queue.get — THIS is the hang
+                              # detector: no token for 7s means the student
+                              # asked and no answer is coming. Fires only on a
+                              # real stall, never while tokens (progress) flow.
+MAX_STREAM_TIME_S = 120      # wall-clock backstop — only a pathological slow
+                              # trickle reaches it; a real stall is caught far
+                              # sooner by STREAM_TOKEN_TIMEOUT_S. Long mini-
+                              # lectures legitimately stream 30-60s, so this must
+                              # NOT double as a total-length cap.
 FORCE_FLUSH_IDLE_S = 8
 
 _COMPONENT = "llm"
@@ -228,8 +232,14 @@ def stream_fast(messages: list, temperature: float = 0.6,
     # — observed 2026-05-17), this timer guarantees the consumer unblocks after
     # MAX_STREAM_TIME_S by pushing the end-of-stream sentinel. The hung producer
     # thread stays as a leaked daemon — acceptable, main is unblocked.
+    # `_done` is set the instant the consumer loop exits, so a stream that
+    # finishes in time cancels the timer — otherwise it leaked and fired a
+    # confusing (though harmless) "wall-clock abort" line on every normal turn.
+    _done = threading.Event()
+
     def _wall_clock_abort():
-        time.sleep(MAX_STREAM_TIME_S)
+        if _done.wait(MAX_STREAM_TIME_S):
+            return                       # stream already finished — nothing to abort
         try:
             q.put(None)
             log(_COMPONENT,
@@ -244,27 +254,26 @@ def stream_fast(messages: list, temperature: float = 0.6,
     stream_start = time.time()
     got_first_token = False
 
-    while True:
-        try:
-            token = q.get(timeout=STREAM_TOKEN_TIMEOUT_S)
-        except queue.Empty:
-            elapsed = time.time() - stream_start
-            if not got_first_token:
-                log(_COMPONENT,
-                    f"connection hang: no first token in {elapsed:.0f}s, aborting")
-            else:
-                log(_COMPONENT,
-                    f"timeout: no tokens for {STREAM_TOKEN_TIMEOUT_S}s, aborting")
-            break
-        if token is None:
-            log(_COMPONENT, "stream finished normally")
-            break
-        if time.time() - stream_start > MAX_STREAM_TIME_S:
-            log(_COMPONENT,
-                f"max stream time {MAX_STREAM_TIME_S}s reached, aborting")
-            break
-        got_first_token = True
-        yield token
+    try:
+        while True:
+            try:
+                token = q.get(timeout=STREAM_TOKEN_TIMEOUT_S)
+            except queue.Empty:
+                elapsed = time.time() - stream_start
+                if not got_first_token:
+                    log(_COMPONENT,
+                        f"connection hang: no first token in {elapsed:.0f}s, aborting")
+                else:
+                    log(_COMPONENT,
+                        f"timeout: no tokens for {STREAM_TOKEN_TIMEOUT_S}s, aborting")
+                break
+            if token is None:
+                log(_COMPONENT, "stream finished normally")
+                break
+            got_first_token = True
+            yield token
+    finally:
+        _done.set()                      # cancel the wall-clock abort timer
 
 
 # Emotion tags like (neutral) / (thoughtful) / *happy* are leftovers from older
