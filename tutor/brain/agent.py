@@ -91,16 +91,17 @@ class AgentThread(threading.Thread):
         log("agent", "agent loop started")
         while self._running:
             try:
-                utterance = self._input_q.get(timeout=0.3)
+                item = self._input_q.get(timeout=0.3)
             except queue.Empty:
                 self._maybe_auto_resume()
                 self._maybe_offer()
                 continue
+            utterance, was_interruption = item
             self._interrupt_seen_at = None
             self._interrupt.clear()
-            log("agent", f"handling: {utterance!r}")
+            log("agent", f"handling: {utterance!r} (interruption={was_interruption})")
             try:
-                self._handle(utterance)
+                self._handle(utterance, was_interruption)
             except Exception as exc:
                 log("agent", f"turn failed: {type(exc).__name__}: {exc}")
                 traceback.print_exc()
@@ -109,7 +110,7 @@ class AgentThread(threading.Thread):
     # Routing one utterance
     # ------------------------------------------------------------------
 
-    def _handle(self, utterance: str) -> None:
+    def _handle(self, utterance: str, was_interruption: bool) -> None:
         # A proactive offer is awaiting an answer.
         if self._offer is not None:
             offer, self._offer = self._offer, None
@@ -129,10 +130,11 @@ class AgentThread(threading.Thread):
             self._handle_resume()
             return
 
-        # A question. If the top answer is still in progress, the student
-        # interrupted it — the new question nests under it.
+        # A question nests under the current answer ONLY if the student
+        # actually interrupted — spoke while the professor was still voicing.
+        # An independent question asked after a finished answer is NOT nested.
         cur = self._stack.current
-        nested = cur is not None and not cur.fully_voiced
+        nested = was_interruption and cur is not None
         if nested and self._stack.depth >= MAX_STACK_DEPTH:
             # 4th nesting level — refuse and park the question.
             self._stack.defer(utterance)

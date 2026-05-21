@@ -89,7 +89,7 @@ def main() -> None:
 
     # 1. ask A
     log("smoke", "STEP 1 — ask A")
-    input_q.put("Что такое вайб-кодинг?")
+    input_q.put(("Что такое вайб-кодинг?", False))
     _wait(lambda: agent._stack.depth >= 1, 30, "A on the stack")
     answer_a = agent._stack.current
 
@@ -104,7 +104,7 @@ def main() -> None:
     #    system it stays set from speech onset until STT delivers the text.
     interrupt.set()
     time.sleep(1.5)
-    input_q.put("А что такое Plan Mode?")
+    input_q.put(("А что такое Plan Mode?", True))   # interruption
     _wait(lambda: agent._stack.depth >= 2, 30, "B nested on the stack")
     answer_b = agent._stack.current
     assert answer_b is not answer_a, "B should be a new Answer"
@@ -116,7 +116,7 @@ def main() -> None:
 
     # 5. resume
     log("smoke", "STEP 5 — say 'продолжай'")
-    input_q.put("продолжай")
+    input_q.put(("продолжай", False))
     _wait(lambda: agent._stack.depth == 1, 20, "stack popped back to A")
     _wait(lambda: answer_a.fully_voiced, 30, "A resumed to completion")
 

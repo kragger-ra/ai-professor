@@ -202,6 +202,9 @@ class CaptureThread(threading.Thread):
         speech_buffer: list = []
         silence_count = 0
         is_speaking = False
+        # True if the professor was voicing when this utterance began — i.e.
+        # the student actually interrupted (vs. asking after a finished answer).
+        was_interruption = False
 
         # Per-run accumulator state (avoids module-level mutable globals)
         stt_accumulator: list = []
@@ -230,7 +233,7 @@ class CaptureThread(threading.Thread):
                             full_text = " ".join(stt_accumulator)
                             stt_accumulator = []
                             log("capture", f"flush accumulator: '{full_text}'")
-                            self._input_q.put(full_text)
+                            self._input_q.put((full_text, was_interruption))
                             is_speaking = False
 
                     # Anti-echo: raise the gate while TTS is actively playing
@@ -245,7 +248,11 @@ class CaptureThread(threading.Thread):
                             is_speaking = True
                             speech_buffer.clear()
                             silence_count = 0
-                            log("capture", f"speech started (RMS={rms:.0f})")
+                            # The professor voicing right now => this is a
+                            # real interruption, not an independent question.
+                            was_interruption = _tts_on
+                            log("capture", f"speech started (RMS={rms:.0f}, "
+                                           f"interruption={was_interruption})")
                             # Signal the agent immediately on first speech sample
                             self._interrupt.set()
                         speech_buffer.append(audio_chunk.copy())
@@ -280,7 +287,7 @@ class CaptureThread(threading.Thread):
                                         full_text = " ".join(stt_accumulator)
                                         stt_accumulator = []
                                         log("capture", f"utterance: '{full_text}'")
-                                        self._input_q.put(full_text)
+                                        self._input_q.put((full_text, was_interruption))
                                 else:
                                     log("capture", "too short, skipping")
                                 speech_buffer.clear()

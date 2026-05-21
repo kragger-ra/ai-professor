@@ -243,35 +243,43 @@ class PlaybackThread(threading.Thread):
                 idx = answer.voiced_index
                 if idx < len(answer.sentences):
                     sentence = answer.sentences[idx]
-                    # Audio: reuse the prefetch if it is for this index.
-                    if prefetch is not None and prefetch_idx == idx:
-                        try:
+                    # Synthesize + play one sentence. A failure here (Vosk
+                    # down, device busy, ...) must NOT stick the whole answer:
+                    # log it, skip the sentence, and still advance voiced_index
+                    # so the answer can complete and downstream state stays sane.
+                    try:
+                        if prefetch is not None and prefetch_idx == idx:
                             audio, sr = prefetch.result()
-                        except Exception as exc:
-                            log("playback", f"prefetch error: {exc}")
+                        else:
                             audio, sr = vosk_tts_sentence(sentence, "neutral")
-                    else:
-                        audio, sr = vosk_tts_sentence(sentence, "neutral")
-                    prefetch = None
-                    if self._interrupt.is_set():
-                        break
-                    # Prefetch the next sentence while this one plays.
-                    if idx + 1 < len(answer.sentences):
-                        prefetch_idx = idx + 1
-                        prefetch = executor.submit(
-                            vosk_tts_sentence, answer.sentences[idx + 1], "neutral"
-                        )
-                    if len(audio) > 0:
-                        log("playback", f"> {sentence[:70]}")
-                        ap.play_sound(audio, sr, blocking=True)
+                        prefetch = None
+                        if self._interrupt.is_set():
+                            break
+                        # Prefetch the next sentence while this one plays.
+                        if idx + 1 < len(answer.sentences):
+                            prefetch_idx = idx + 1
+                            prefetch = executor.submit(
+                                vosk_tts_sentence,
+                                answer.sentences[idx + 1], "neutral",
+                            )
+                        if len(audio) > 0:
+                            log("playback", f"> {sentence[:70]}")
+                            ap.play_sound(audio, sr, blocking=True)
+                    except Exception as exc:
+                        log("playback",
+                            f"sentence skipped ({type(exc).__name__}: {exc})")
+                        prefetch = None
                     if self._interrupt.is_set():
                         break          # cut mid-sentence — do NOT advance
                     answer.mark_voiced(1)
                     voiced += 1
                     # Short pause before the next sentence.
                     if answer.voiced_index < len(answer.sentences) or answer.generating:
-                        ps, psr = generate_silence(pause_for_sentence(sentence))
-                        ap.play_sound(ps, psr, blocking=True)
+                        try:
+                            ps, psr = generate_silence(pause_for_sentence(sentence))
+                            ap.play_sound(ps, psr, blocking=True)
+                        except Exception:
+                            pass
                 elif answer.generating:
                     time.sleep(0.05)    # caught up — wait for the generator
                 else:

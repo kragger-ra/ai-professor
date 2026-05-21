@@ -34,26 +34,20 @@ def main() -> None:
 
     question = "Что такое вайб-кодинг?"
     log("smoke", f"asking: {question!r}")
-    input_q.put(question)
+    input_q.put((question, False))   # (text, was_interruption)
 
-    # Collect answer sentences: wait up to 45s; a 1.5s gap after the first
-    # sentence means the answer is complete.
-    sentences: list = []
+    # The agent puts one Answer object on tts_q per turn; its generator
+    # thread fills answer.sentences as the LLM streams.
+    answer = tts_q.get(timeout=45)
     deadline = time.time() + 45
-    while time.time() < deadline:
-        try:
-            sentences.append(tts_q.get(timeout=1.5))
-        except queue.Empty:
-            if sentences:
-                break
+    while answer.generating and time.time() < deadline:
+        time.sleep(0.2)
     agent.stop()
 
-    assert sentences, "no answer sentences were produced"
-    answer = " ".join(
-        s if isinstance(s, str) else s.get("text", "") for s in sentences
-    ).strip()
-    log("smoke", f"answer ({len(sentences)} sentence(s)): {answer}")
-    assert len(answer) > 20, "answer suspiciously short"
+    assert answer.sentences, "no answer sentences were produced"
+    text = " ".join(answer.sentences).strip()
+    log("smoke", f"answer ({len(answer.sentences)} sentence(s)): {text}")
+    assert len(text) > 20, "answer suspiciously short"
     log("smoke", "=== PHASE 2 SMOKE PASSED ===")
 
 
