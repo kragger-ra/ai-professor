@@ -171,6 +171,9 @@ class CaptureThread(threading.Thread):
         self._vocab_lock = threading.Lock()
         self._device_name = device_name
         self._running = True
+        # Set once the mic stream is open — app.py waits on this to play
+        # the audible "ready" cue.
+        self.ready = threading.Event()
 
     # ------------------------------------------------------------------
     # Public API
@@ -218,6 +221,7 @@ class CaptureThread(threading.Thread):
                 blocksize=BLOCK_SIZE,
                 device=device_index,
             ) as stream:
+                self.ready.set()   # mic stream open — pipeline is listening
                 while self._running:
                     data, _overflowed = stream.read(BLOCK_SIZE)
                     audio_chunk = data[:, 0]  # mono

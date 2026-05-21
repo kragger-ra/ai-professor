@@ -4,19 +4,14 @@ title AI Professor (Tutor v2)
 cd /d "%~dp0"
 
 rem ============================================================
-rem  Tutor v2 launcher — brings up the Vosk TTS server, then the
+rem  Tutor v2 launcher - starts the Vosk TTS server, then the
 rem  single-process tutor app (python -m tutor.app).
 rem  LM Studio (RAG embeddings, :22227) is a separate prerequisite.
 rem ============================================================
 
 echo [1/2] Vosk TTS server...
 curl -s -o nul --max-time 1 http://localhost:22232/health
-if not errorlevel 1 (
-    echo       already running
-    goto check_lms
-)
-rem Detach the TTS server into its own minimized console so it
-rem survives after this launcher hands off to the foreground app.
+if not errorlevel 1 goto vosk_running
 powershell -NoProfile -Command "Start-Process -WindowStyle Minimized -FilePath 'scripts\_run_vosk_tts.bat'"
 echo       waiting for TTS (model load can take up to 3 min on first run)...
 set TTS_WAIT=0
@@ -30,16 +25,24 @@ echo       ERROR: TTS did not start within 3 minutes. Check vosk_tts.log
 exit /b 1
 :tts_ready
 echo       TTS ready after %TTS_WAIT% sec
+goto check_lms
+:vosk_running
+echo       already running
 
 :check_lms
-rem LM Studio embeddings — required for RAG; started separately.
 curl -s -o nul --max-time 1 http://localhost:22227/v1/models
-if errorlevel 1 (
-    echo       WARNING: LM Studio ^(:22227^) not responding — RAG will be
-    echo                unavailable. Start LM Studio with the bge-m3 model.
-)
+if not errorlevel 1 goto launch
+echo       WARNING: LM Studio (:22227) not responding - RAG will be
+echo                unavailable. Start LM Studio with the bge-m3 model.
 
-echo [2/2] Starting AI Professor Tutor v2...
+:launch
+echo.
+echo ============================================================
+echo   AI Professor Tutor v2 is running.
+echo   - You will HEAR a readiness signal when it starts listening.
+echo   - Full log: tutor_v2.log
+echo   - Keep this window open. Press Ctrl+C here to stop.
+echo ============================================================
 echo.
 set PYTHONIOENCODING=utf-8
-.venv\Scripts\python.exe -m tutor.app
+.venv\Scripts\python.exe -m tutor.app > tutor_v2.log 2>&1

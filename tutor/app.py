@@ -22,6 +22,7 @@ import time
 from tutor.audio.capture import CaptureThread
 from tutor.audio.playback import PlaybackThread
 from tutor.brain.agent import AgentThread
+from tutor.brain.answer import Answer
 from tutor.brain.rag import RagModel
 from tutor.util import log
 
@@ -63,6 +64,13 @@ def main() -> None:
     agent.start()
     playback.start()
     capture.start()
+
+    # Audible "ready" cue once the mic stream is open — also a live
+    # end-to-end check that the TTS chain works.
+    if capture.ready.wait(timeout=120):
+        cue = Answer(question="", sentences=["Профессор готов. Спрашивай."])
+        cue.finish_generation()
+        tts_q.put(cue)
     log("app", "pipeline up — speak to the professor (Ctrl+C to quit)")
 
     try:
