@@ -50,11 +50,11 @@ class FasterWhisperSTT:
             pcm,
             language="ru",
             beam_size=beam,
-            vad_filter=True,
-            vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=400,
-            ),
+            # vad_filter is OFF on purpose: CaptureThread already gates speech
+            # with its own energy VAD, and faster-whisper's internal Silero VAD
+            # was discarding short clear utterances ("да давайте") as non-speech
+            # — the whole clip came back empty. One VAD is enough.
+            vad_filter=False,
             # condition_on_previous_text=True is the faster-whisper default and
             # drags the model into looping/echoing earlier turns once a session
             # runs long. Off for chat use.
