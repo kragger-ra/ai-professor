@@ -37,6 +37,7 @@ QA_MAX_SENTENCES = 4              # default answer cap; tuned 2..8 at runtime
 RESPONSE_MAX_TOKENS = 400
 NESTED_MAX_TOKENS = 220           # a nested clarification stays short (2-3 sentences)
 MINILECTURE_MAX_TOKENS = 900      # bigger budget for a confirmed mini-lecture
+META_TIMEOUT_S = 4.0              # cap how long an answer waits on the meta-agent
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
 DEFAULT_REGISTER = 2             # 1..5 vocabulary level; starts simple
@@ -296,17 +297,24 @@ class AgentThread(threading.Thread):
             meta_agent.analyze_context, "", recent, utterance
         )
         rag_future = self._pool.submit(self._rag_lookup, utterance)
-        meta_result = meta_future.result()
+        # Meta is best-effort — it must not stall the answer. If it is slow,
+        # proceed with safe defaults; the abandoned task finishes on its own.
+        try:
+            meta_result = meta_future.result(timeout=META_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            log("agent", "meta-agent slow — answering with defaults this turn")
+            meta_result = dict(meta_agent.SAFE_DEFAULTS)
         rag_context, rag_score = rag_future.result()
 
         # Drift the speaking register + answer-length cap toward the student.
         self._apply_calibration(meta_result)
 
-        # mini-lecture: long; nested: a quick mid-explanation clarification,
-        # forced short so the main thread is not lost; fresh: the tuned cap.
+        # mini-lecture: long. nested: a quick mid-explanation clarification,
+        # forced short so the main thread is not lost — UNLESS the student
+        # explicitly switched to the detailed manner. fresh: the tuned cap.
         if long:
             style_rule, max_tokens = _MINILECTURE_RULE, MINILECTURE_MAX_TOKENS
-        elif nested:
+        elif nested and self._manner != "detailed":
             style_rule, max_tokens = _NESTED_RULE, NESTED_MAX_TOKENS
         else:
             style_rule = _length_rule(self._max_sentences)
