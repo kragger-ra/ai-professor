@@ -34,6 +34,7 @@ from tutor.brain import meta as meta_agent
 from tutor.brain.answer import MAX_STACK_DEPTH, Answer, AnswerStack
 from tutor.brain.llm import stream_response_sentences
 from tutor.brain.prompt import PROFESSOR_GOAL, construct_prompt, create_chat_from_prompt
+from tutor.brain.profile import StudentProfile
 from tutor.brain.rag import RagModel
 from tutor.brain.session_memory import SessionMemory
 from tutor.util import log
@@ -129,6 +130,8 @@ class AgentThread(threading.Thread):
         self._history: list[dict] = []
         # Cross-session memory — loads the past-sessions summary from disk.
         self._memory = SessionMemory()
+        # Student profile — the one local student's name / background.
+        self._profile = StudentProfile()
         self._student_turns = 0           # counts questions for the refresh cadence
         self._stack = AnswerStack()
         # A proactively spoken offer awaiting a yes/no:
@@ -283,6 +286,15 @@ class AgentThread(threading.Thread):
 
     def _answer_question(self, utterance: str, nested: bool,
                          long: bool = False) -> None:
+        # Learn the student's name / background from an introduction — regex
+        # only, cheap. Runs while the profile is still incomplete.
+        if not (self._profile.name and self._profile.background):
+            info = meta_agent.extract_student_info(utterance)
+            if info and self._profile.note_intro(
+                info.get("name", ""), info.get("background", "")
+            ):
+                self._profile.save()
+
         # meta-agent + RAG retrieval, in parallel.
         recent = [self._turn_text(h) for h in self._history[-5:]]
         meta_future = self._pool.submit(
@@ -315,7 +327,7 @@ class AgentThread(threading.Thread):
         system_prompt = PROFESSOR_GOAL + "\n\n" + construct_prompt(
             rag_context=rag_context,
             personality_key=self._personality,
-            student_profile="",
+            student_profile=self._profile.as_prompt_section(),
             meta_instruction=meta_instruction,
             rag_score=rag_score,
             past_sessions=self._memory.as_prompt_section(),
@@ -477,12 +489,17 @@ class AgentThread(threading.Thread):
                           name="memory-refresh").start()
 
     def persist_memory(self) -> None:
-        """Refresh + save the session summary synchronously (for shutdown)."""
+        """Refresh + save the session summary and the profile (for shutdown)."""
         try:
             self._memory.refresh(list(self._history))
             self._memory.save()
         except Exception as exc:
             log("agent", f"persist_memory failed: "
+                         f"{type(exc).__name__}: {exc}")
+        try:
+            self._profile.save()
+        except Exception as exc:
+            log("agent", f"profile save failed: "
                          f"{type(exc).__name__}: {exc}")
 
     def _rag_lookup(self, query: str) -> tuple[str, float]:
