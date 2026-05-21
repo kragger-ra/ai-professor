@@ -23,7 +23,6 @@ import traceback
 from typing import Optional
 
 import numpy as np
-import soundcard as sc
 import sounddevice as sd
 
 from tutor.tts.vosk_client import (
@@ -59,16 +58,6 @@ class AudioProcessor:
     # Device setup
     # ------------------------------------------------------------------
 
-    def _find_speaker_by_name(self, target_name: str):
-        speakers = sc.all_speakers()
-        for s in speakers:
-            if s.name == target_name:
-                return s
-        for s in speakers:
-            if target_name in s.name:
-                return s
-        return None
-
     @staticmethod
     def _find_sd_output_index(name: str) -> Optional[int]:
         """Find a sounddevice output index matching name (substring, case-insensitive).
@@ -96,17 +85,10 @@ class AudioProcessor:
         return priority[0][1] if priority else None
 
     def _setup_main_audio_devices(self) -> None:
-        self.main_speaker = self._find_speaker_by_name(SOUND_DEVICE_OUT)
-        if self.main_speaker is None:
-            self.main_speaker = sc.default_speaker()
-            log(
-                "playback",
-                f"main device '{SOUND_DEVICE_OUT}' not found, "
-                f"using default: {self.main_speaker.name}",
-            )
-        else:
-            log("playback", f"main device found: {self.main_speaker.name}")
-
+        # Playback goes entirely through sounddevice (PortAudio) — it manages
+        # its own COM init, so it works inside a worker thread. The soundcard
+        # library is intentionally NOT used (its COM enumeration crashes in a
+        # bare thread with CO_E_NOTINITIALIZED).
         self._main_sd_index = self._find_sd_output_index(SOUND_DEVICE_OUT)
         if self._main_sd_index is None:
             log("playback", f"sounddevice fallback to system default for '{SOUND_DEVICE_OUT}'")
@@ -147,15 +129,15 @@ class AudioProcessor:
         fixed_audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=target_sr)
 
         if blocking:
-            self._play_safe(self.main_speaker, fixed_audio, target_sr)
+            self._play_safe(fixed_audio, target_sr)
         else:
             threading.Thread(
                 target=self._play_safe,
-                args=(self.main_speaker, fixed_audio, target_sr),
+                args=(fixed_audio, target_sr),
                 daemon=True,
             ).start()
 
-    def _play_safe(self, speaker, audio: np.ndarray, sr: int) -> None:
+    def _play_safe(self, audio: np.ndarray, sr: int) -> None:
         """Play audio to the main output via sounddevice in chunked shared mode.
 
         Checks _last_interrupt_time on every chunk (~100 ms) so an interrupt
