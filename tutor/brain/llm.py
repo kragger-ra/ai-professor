@@ -79,17 +79,25 @@ class SentenceBuffer:
                 self.buffer = self.buffer[end:].lstrip()
 
                 if len(sentence.split()) < 4:
-                    # Too short — likely a leftover fragment. Try to glue:
-                    # 1. If buffer still has content — prepend to next sentence
-                    # 2. If we already emitted in this batch — append to previous
-                    # 3. Else — keep in buffer, wait for more tokens
-                    if self.buffer:
-                        self.buffer = sentence + " " + self.buffer
+                    # Too short to stand alone — glue it to a neighbour:
+                    # 1. a following sentence is already complete — merge forward
+                    # 2. we already emitted one this batch — append the fragment
+                    # 3. nothing to glue to yet — keep buffered, wait for tokens
+                    # NB: case 1 must consume past the next boundary. Re-inserting
+                    # the fragment and `continue` would re-match the same spot
+                    # forever (infinite loop on answers like "Да. ...").
+                    m2 = _SENTENCE_END_RE.search(self.buffer)
+                    if m2:
+                        nxt = self.buffer[:m2.end()].strip()
+                        self.buffer = self.buffer[m2.end():].lstrip()
+                        merged = (sentence + " " + nxt).strip()
+                        if merged:
+                            sentences.append(merged)
                         continue
                     if sentences:
                         sentences[-1] = sentences[-1].rstrip() + " " + sentence
                         continue
-                    self.buffer = sentence
+                    self.buffer = sentence + " " + self.buffer
                     break
 
                 if sentence:
