@@ -41,7 +41,7 @@ from tutor.util import log
 _REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 
 RAG_STORE_DIR: str = str(_REPO_ROOT / "data" / "rag_vector_store")
-_COURSE_MATERIALS_DIR: str = str(_REPO_ROOT / "resources" / "RAG" / "course_materials")
+_RAG_ROOT_DIR: str = str(_REPO_ROOT / "resources" / "RAG")
 
 _COMPONENT = "rag"
 
@@ -174,7 +174,7 @@ class RagModel:
             RAG_STORE_DIR, self.index_name + ".faiss"
         )
         self.course_loader = CustomDirectoryLoader(
-            _COURSE_MATERIALS_DIR, ["course_materials"]
+            _RAG_ROOT_DIR, ["course_materials"]
         )
         self.text_splitter = CustomTripleNewLineSplitter(
             chunk_size=1000, chunk_overlap=0
