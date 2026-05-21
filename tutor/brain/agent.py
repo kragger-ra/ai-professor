@@ -164,6 +164,16 @@ class AgentThread(threading.Thread):
                 continue
             utterance, was_interruption = item
             self._interrupt.clear()
+            if not utterance.strip():
+                # Capture flagged an interruption that produced no usable
+                # transcript (cough / noise / backchannel). Don't fall
+                # silent — resume the answer the interrupt cut off.
+                log("agent", "interruption with no transcript - resuming")
+                try:
+                    self._handle_continue(bridge=False)
+                except Exception as exc:
+                    log("agent", f"resume failed: {type(exc).__name__}: {exc}")
+                continue
             log("agent", f"handling: {utterance!r} (interruption={was_interruption})")
             try:
                 self._handle(utterance, was_interruption)
@@ -394,9 +404,10 @@ class AgentThread(threading.Thread):
     # Resume + proactive offers
     # ------------------------------------------------------------------
 
-    def _handle_continue(self) -> None:
+    def _handle_continue(self, bridge: bool = True) -> None:
         """Finish voicing the CURRENT answer from where it was cut off.
-        Stack depth is unchanged. Never calls the LLM."""
+        Stack depth is unchanged. Never calls the LLM. With bridge=False the
+        answer resumes silently — used for cough / noise false interrupts."""
         cur = self._stack.current
         if cur is None:
             return
@@ -404,7 +415,10 @@ class AgentThread(threading.Thread):
         if not cur.unvoiced and not cur.generating:
             log("agent", "continue requested but nothing left to voice")
             return
-        self._voice(_CONTINUE_BRIDGE, cur)
+        if bridge:
+            self._voice(_CONTINUE_BRIDGE, cur)
+        else:
+            self._tts_q.put(cur)
         log("agent", f"continued — stack depth {self._stack.depth}")
 
     def _handle_return(self) -> None:

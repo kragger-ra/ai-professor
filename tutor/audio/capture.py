@@ -279,21 +279,29 @@ class CaptureThread(threading.Thread):
 
                             if silence_count >= SILENCE_AFTER_SPEECH_BLOCKS:
                                 is_speaking = False
+                                text = None
                                 if len(speech_buffer) >= SPEECH_MIN_BLOCKS:
                                     text = self._transcribe(
                                         recognizer, speech_buffer
                                     )
-                                    if text:
-                                        stt_accumulator.append(text)
-                                        stt_last_segment_time = time.time()
-                                        # Flush immediately — one utterance per
-                                        # silence window is the simple path.
-                                        full_text = " ".join(stt_accumulator)
-                                        stt_accumulator = []
-                                        log("capture", f"utterance: '{full_text}'")
-                                        self._input_q.put((full_text, was_interruption))
                                 else:
                                     log("capture", "too short, skipping")
+                                if text:
+                                    stt_accumulator.append(text)
+                                    stt_last_segment_time = time.time()
+                                    # Flush immediately — one utterance per
+                                    # silence window is the simple path.
+                                    full_text = " ".join(stt_accumulator)
+                                    stt_accumulator = []
+                                    log("capture", f"utterance: '{full_text}'")
+                                    self._input_q.put((full_text, was_interruption))
+                                elif was_interruption:
+                                    # Interrupt halted playback but STT got
+                                    # nothing usable (cough / noise). Tell the
+                                    # agent to resume the cut-off answer.
+                                    log("capture",
+                                        "interruption, no transcript - resume signal")
+                                    self._input_q.put(("", was_interruption))
                                 speech_buffer.clear()
         except Exception as exc:
             log("capture", f"error: {exc}")
