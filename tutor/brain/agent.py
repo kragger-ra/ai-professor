@@ -113,6 +113,14 @@ _RETURN_OFFER = "Вернёмся к тому, о чём мы говорили �
 _CAP_PHRASE = ("Давай закончим начатое, а про твой вопрос поговорим чуть позже, "
                "иначе можем запутаться.")
 
+# --- TEMPORARY -------------------------------------------------------------
+# Nesting (mid-explanation follow-ups stacked onto the answer stack) and
+# returns ("вернёмся" / the auto-offer to go back) are buggy and break the
+# normal Q&A cycle — disabled until fixed. When True: every question is
+# answered fresh at stack depth 1, "вернёмся" degrades to a plain continue,
+# and the proactive return offer is silenced. Flip to False to restore.
+_NESTING_AND_RETURNS_DISABLED = True
+
 
 class AgentThread(threading.Thread):
     """QA agent with a depth-capped, interrupt-aware answer stack."""
@@ -200,9 +208,13 @@ class AgentThread(threading.Thread):
             self._handle_continue()
             return
 
-        # Return — step back up to the parent answer, no LLM.
+        # Return — step back up to the parent answer, no LLM. While returns
+        # are disabled, "вернёмся" degrades to a plain continue.
         if self._stack.depth > 0 and self._is_return(utterance):
-            self._handle_return()
+            if _NESTING_AND_RETURNS_DISABLED:
+                self._handle_continue()
+            else:
+                self._handle_return()
             return
 
         # Bare acknowledgement ("да", "давайте", "понятно") — not a question.
@@ -232,7 +244,8 @@ class AgentThread(threading.Thread):
         # actually interrupted — spoke while the professor was still voicing.
         # An independent question asked after a finished answer is NOT nested.
         cur = self._stack.current
-        nested = was_interruption and cur is not None
+        nested = (was_interruption and cur is not None
+                  and not _NESTING_AND_RETURNS_DISABLED)
         if nested and self._stack.depth >= MAX_STACK_DEPTH:
             # 4th nesting level — refuse and park the question.
             self._stack.defer(utterance)
@@ -415,6 +428,8 @@ class AgentThread(threading.Thread):
     def _maybe_offer(self) -> None:
         """When a (sub-)answer has finished voicing, proactively offer the
         next step: return to the parent, or pick up a parked question."""
+        if _NESTING_AND_RETURNS_DISABLED:
+            return
         if self._offer is not None:
             return
         cur = self._stack.current
