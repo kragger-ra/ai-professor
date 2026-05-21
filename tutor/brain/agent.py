@@ -1,21 +1,21 @@
 """The agent — the brain of the tutor.
 
-PHASE 3 — interrupt + resume on the answer stack.
+PHASE 4 — full nesting on the answer stack.
 
 Per student utterance the agent routes:
-  * a resume phrase ("продолжай" / "вернёмся") -> re-voice from memory,
-    NO LLM call (instant, hang-proof);
-  * a question while an answer is still in progress (the student interrupted)
-    -> push the new answer onto the stack — a nested follow-up;
-  * a fresh question -> clear the stack and answer from the top.
+  * a pending offer ("вернёмся к…?" / "разобрать отложенный вопрос?")
+    -> "да" accepts, anything else declines;
+  * a resume phrase ("продолжай" / "вернёмся") -> re-voice from memory, no LLM;
+  * a question while an answer is in progress -> nest it under the current
+    answer, UNLESS the stack is already 3 deep — then refuse with a fixed
+    phrase and PARK the question (it resurfaces when the stack unwinds);
+  * a fresh question -> answer it from a clean stack.
 
-Generation runs in its OWN thread and always completes into the `Answer`
-object, even when voicing was interrupted — so a resume just re-voices the
-stored, already-finished answer.
+Generation runs in its own thread and always completes into the `Answer`
+object, so a resume just re-voices stored, finished text — instant, no LLM.
 
-Still stubbed for later phases: the depth-3 cap + deferred-question parking
-+ the auto-offer (Phase 4); voice commands and the mini-lecture checker
-(Phase 5); cross-session memory and profiles (Phase 6).
+Still stubbed for later phases: voice commands + mini-lecture checker +
+adaptive register (Phase 5); cross-session memory + profiles (Phase 6).
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ import time
 import traceback
 
 from tutor.brain import meta as meta_agent
-from tutor.brain.answer import Answer, AnswerStack
+from tutor.brain.answer import MAX_STACK_DEPTH, Answer, AnswerStack
 from tutor.brain.llm import stream_response_sentences
 from tutor.brain.prompt import PROFESSOR_GOAL, construct_prompt, create_chat_from_prompt
 from tutor.brain.rag import RagModel
@@ -42,20 +42,26 @@ RESPONSE_MAX_TOKENS = 400
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
 
-# Resume phrases — short utterances meaning "go back to voicing".
-_RESUME_RE = re.compile(
-    r"продолж|верн[иёе]|дальше|поехали", re.IGNORECASE
-)
+_RESUME_RE = re.compile(r"продолж|верн[иёе]|дальше|поехали", re.IGNORECASE)
+_YES_RE = re.compile(r"\bда\b|давай|конечно|ага|хочу|разбер|продолж|верн[иёе]",
+                     re.IGNORECASE)
+_NO_RE = re.compile(r"\bнет\b|не\s+надо|не\s+нужно|потом|позже|не\s+хочу",
+                    re.IGNORECASE)
+
 # A stray interrupt with no follow-up utterance (a cough): auto-resume the
 # unfinished answer after this idle gap.
 _AUTO_RESUME_AFTER_S = 2.0
 
 _RESUME_BRIDGE = "Возвращаемся к тому, о чём говорили."
 _CONTINUE_BRIDGE = "Продолжаю."
+_RETURN_OFFER = "Вернёмся к тому, о чём мы говорили до этого?"
+# Spoken verbatim when a 4th nesting level is refused.
+_CAP_PHRASE = ("Давай закончим начатое, а про твой вопрос поговорим чуть позже, "
+               "иначе можем запутаться.")
 
 
 class AgentThread(threading.Thread):
-    """QA agent with an interrupt-aware answer stack."""
+    """QA agent with a depth-capped, interrupt-aware answer stack."""
 
     def __init__(self, input_q: queue.Queue, tts_q: queue.Queue,
                  interrupt: threading.Event, rag_model: RagModel | None):
@@ -67,8 +73,12 @@ class AgentThread(threading.Thread):
         self._running = True
         self._personality = DEFAULT_PERSONALITY
         self._history: list[dict] = []
-        self._stack = AnswerStack()        # holds the active answer + parents
+        self._stack = AnswerStack()
         self._interrupt_seen_at: float | None = None
+        # A proactively spoken offer awaiting a yes/no:
+        #   {"type": "return"} | {"type": "deferred", "question": str}
+        self._offer: dict | None = None
+        self._offered_for: Answer | None = None   # answer we already offered for
         self._pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="preflight"
         )
@@ -84,6 +94,7 @@ class AgentThread(threading.Thread):
                 utterance = self._input_q.get(timeout=0.3)
             except queue.Empty:
                 self._maybe_auto_resume()
+                self._maybe_offer()
                 continue
             self._interrupt_seen_at = None
             self._interrupt.clear()
@@ -99,19 +110,50 @@ class AgentThread(threading.Thread):
     # ------------------------------------------------------------------
 
     def _handle(self, utterance: str) -> None:
+        # A proactive offer is awaiting an answer.
+        if self._offer is not None:
+            offer, self._offer = self._offer, None
+            if self._is_yes(utterance):
+                if offer["type"] == "return":
+                    self._handle_resume()
+                else:                                  # deferred question
+                    self._answer_question(offer["question"], nested=False)
+                return
+            if self._is_no(utterance):
+                log("agent", "offer declined")
+                return
+            # neither yes nor no — a new question; drop the offer, handle below.
+
         # Resume command — re-voice from memory, no LLM.
         if self._is_resume(utterance) and self._stack.depth > 0:
             self._handle_resume()
             return
+
         # A question. If the top answer is still in progress, the student
         # interrupted it — the new question nests under it.
         cur = self._stack.current
         nested = cur is not None and not cur.fully_voiced
+        if nested and self._stack.depth >= MAX_STACK_DEPTH:
+            # 4th nesting level — refuse and park the question.
+            self._stack.defer(utterance)
+            log("agent", f"depth cap ({MAX_STACK_DEPTH}) — parked: {utterance[:40]!r}")
+            self._speak_line(_CAP_PHRASE)
+            return
         self._answer_question(utterance, nested=nested)
 
     def _is_resume(self, utterance: str) -> bool:
         u = utterance.strip()
         return len(u) < 40 and bool(_RESUME_RE.search(u))
+
+    @staticmethod
+    def _is_yes(utterance: str) -> bool:
+        u = utterance.strip()
+        return len(u) < 40 and bool(_YES_RE.search(u))
+
+    @staticmethod
+    def _is_no(utterance: str) -> bool:
+        u = utterance.strip()
+        return len(u) < 40 and bool(_NO_RE.search(u))
 
     # ------------------------------------------------------------------
     # Answering a question
@@ -144,14 +186,10 @@ class AgentThread(threading.Thread):
         answer = Answer(question=utterance)
         if not nested:
             self._stack.clear()           # fresh top-level question
-        # Phase 4 handles a refused push (depth-3 cap); Phase 3 stays shallow.
-        if not self._stack.push(answer):
-            log("agent", "stack full — Phase 4 will defer; answering flat")
-            self._stack.clear()
-            self._stack.push(answer)
-        else:
-            log("agent", f"answering ({'nested' if nested else 'fresh'}) — "
-                         f"stack depth {self._stack.depth}")
+        self._stack.push(answer)          # _handle already checked the cap
+        self._offered_for = None
+        log("agent", f"answering ({'nested' if nested else 'fresh'}) — "
+                     f"stack depth {self._stack.depth}")
 
         # History in chronological order; the assistant entry keeps a live
         # reference to the Answer so its text fills in as generation streams.
@@ -163,7 +201,6 @@ class AgentThread(threading.Thread):
             target=self._generate, args=(answer, messages),
             daemon=True, name="generate",
         ).start()
-        # Hand the Answer to playback; it voices sentences as they appear.
         self._tts_q.put(answer)
 
     def _generate(self, answer: Answer, messages: list) -> None:
@@ -180,7 +217,7 @@ class AgentThread(threading.Thread):
                      f"for {answer.question[:40]!r}")
 
     # ------------------------------------------------------------------
-    # Resume
+    # Resume + proactive offers
     # ------------------------------------------------------------------
 
     def _handle_resume(self) -> None:
@@ -197,11 +234,33 @@ class AgentThread(threading.Thread):
             bridge = _CONTINUE_BRIDGE
         if target is None:
             return
+        self._offered_for = None
         if not target.unvoiced and not target.generating:
             log("agent", "resume requested but nothing left to voice")
             return
         self._voice(bridge, target)
         log("agent", f"resumed — stack depth {self._stack.depth}")
+
+    def _maybe_offer(self) -> None:
+        """When a (sub-)answer has finished voicing, proactively offer the
+        next step: return to the parent, or pick up a parked question."""
+        if self._offer is not None:
+            return
+        cur = self._stack.current
+        if cur is None or not cur.fully_voiced:
+            return
+        if self._stack.depth >= 2:
+            if cur is self._offered_for:
+                return                    # already offered for this answer
+            self._offered_for = cur
+            self._offer = {"type": "return"}
+            self._speak_line(_RETURN_OFFER)
+            return
+        # back at the root — surface a parked question, if any
+        parked = self._stack.take_deferred()
+        if parked:
+            self._offer = {"type": "deferred", "question": parked}
+            self._speak_line(f"Ты ещё спрашивал: «{parked[:70]}». Разобрать его?")
 
     def _maybe_auto_resume(self) -> None:
         """Stray interrupt with no follow-up (a cough) — re-voice the
@@ -227,11 +286,15 @@ class AgentThread(threading.Thread):
 
     def _voice(self, bridge_text: str, answer: Answer) -> None:
         """Speak a short bridge phrase, then (re-)voice `answer` from its
-        current voiced_index. Both go to playback as Answer objects."""
-        bridge = Answer(question="", sentences=[bridge_text])
-        bridge.finish_generation()
-        self._tts_q.put(bridge)
+        current voiced_index."""
+        self._speak_line(bridge_text)
         self._tts_q.put(answer)
+
+    def _speak_line(self, text: str) -> None:
+        """Voice a single transient line (a bridge / an offer / the cap)."""
+        line = Answer(question="", sentences=[text])
+        line.finish_generation()
+        self._tts_q.put(line)
 
     def _history_messages(self) -> list[dict]:
         """Recent turns as OpenAI-format messages (assistant text read live)."""
