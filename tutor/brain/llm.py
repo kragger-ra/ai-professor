@@ -279,15 +279,19 @@ _EMOTION_TAG_RE = re.compile(
 )
 
 
-# Some models append a bare emotion word with no brackets ("...цель. neutral").
-# Strip a trailing standalone emotion token as well so TTS never voices it.
-_BARE_EMOTION_TAIL_RE = re.compile(
-    r"\s*\b("
+# Models keep appending an emotion tag ("...цель. neutral" / "neutral." /
+# "Neutral"). Two filters: one trims a trailing tag together with any
+# punctuation around it, the other removes any leftover standalone emotion
+# word anywhere — these English words never occur as real content in a
+# Russian course answer.
+_EMOTIONS = (
     r"neutral|happy|sad|angry|scared|whispering|disgusted|sarcastic|"
     r"thoughtful|encouraging"
-    r")\b\s*$",
-    re.IGNORECASE,
 )
+_BARE_EMOTION_TAIL_RE = re.compile(
+    r"\s*\b(" + _EMOTIONS + r")\b[\s.,;:!?)\]*—-]*$", re.IGNORECASE,
+)
+_EMOTION_WORD_RE = re.compile(r"\b(" + _EMOTIONS + r")\b", re.IGNORECASE)
 
 
 # Emojis / pictographs — Vosk would try to vocalize them. Strip outright.
@@ -308,6 +312,7 @@ def _scrub(sentence: str) -> str:
     """Remove inline orchestration markers (emotion tags, emojis)."""
     cleaned = _EMOTION_TAG_RE.sub(" ", sentence)
     cleaned = _BARE_EMOTION_TAIL_RE.sub("", cleaned)
+    cleaned = _EMOTION_WORD_RE.sub("", cleaned)
     cleaned = _EMOJI_RE.sub("", cleaned)
     return cleaned.strip()
 
