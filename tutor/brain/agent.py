@@ -14,8 +14,8 @@ Per student utterance the agent routes:
 Generation runs in its own thread and always completes into the `Answer`
 object, so a resume just re-voices stored, finished text — instant, no LLM.
 
-Still stubbed for later phases: voice commands + mini-lecture checker +
-adaptive register (Phase 5); cross-session memory + profiles (Phase 6).
+Still stubbed for later phases: mini-lecture checker + adaptive register
+(Phase 5); cross-session memory + profiles (Phase 6).
 """
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ import re
 import threading
 import traceback
 
+from tutor.brain import commands
 from tutor.brain import meta as meta_agent
 from tutor.brain.answer import MAX_STACK_DEPTH, Answer, AnswerStack
 from tutor.brain.llm import stream_response_sentences
@@ -72,6 +73,7 @@ class AgentThread(threading.Thread):
         self._rag = rag_model
         self._running = True
         self._personality = DEFAULT_PERSONALITY
+        self._manner = "simpler"          # tracked style; switched by voice command
         self._history: list[dict] = []
         self._stack = AnswerStack()
         # A proactively spoken offer awaiting a yes/no:
@@ -131,6 +133,10 @@ class AgentThread(threading.Thread):
         # Resume command — re-voice from memory, no LLM.
         if self._is_resume(utterance) and self._stack.depth > 0:
             self._handle_resume()
+            return
+
+        # Voice commands — course load / list courses / manner switch.
+        if commands.route(self, utterance):
             return
 
         # A question nests under the current answer ONLY if the student
