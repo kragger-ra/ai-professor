@@ -20,6 +20,7 @@ Agent attributes expected (must be wired in AgentThread before use):
     agent._pool            : ThreadPoolExecutor  -- already exists
     agent._speak_line(text): method  -- already exists
     agent._manner          : str  -- NEW: "simpler" | "neutral" | "detailed"
+    agent._register        : int  -- NEW: 1..5 speaking register
     agent._profiles        : StudentProfileManager | None  -- Phase 6 only
 """
 from __future__ import annotations
@@ -79,13 +80,22 @@ _MANNER_DISPATCH = (
 
 
 def _handle_manner(agent: "AgentThread", utterance: str) -> None:
-    """Switch agent._manner and agent._personality; confirm via TTS."""
+    """Switch agent._manner / _personality / _register; confirm via TTS."""
     lower = utterance.lower()
     for pattern, manner_val, personality_val, confirmation in _MANNER_DISPATCH:
         if pattern.search(lower):
             agent._manner = manner_val
             agent._personality = personality_val
-            log(_COMPONENT, f"manner -> {manner_val}")
+            # An explicit command takes effect at once - the gradual register
+            # drift in AgentThread is only for implicit signals.
+            if manner_val == "simpler":
+                agent._register = max(1, agent._register - 2)
+            elif manner_val == "detailed":
+                agent._register = min(5, agent._register + 2)
+            else:  # neutral
+                agent._register = 3
+            log(_COMPONENT,
+                f"manner -> {manner_val} (register {agent._register})")
             agent._speak_line(confirmation)
             return
 

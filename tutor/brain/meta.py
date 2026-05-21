@@ -1,11 +1,12 @@
 """Meta-agent: fast pre-flight analysis for adaptive professor responses.
 
 Runs ONE small-model call per Q&A and returns a slim JSON the main agent
-folds into its system prompt. Seven fields, each closes a gap the main LLM
+folds into its system prompt. Nine fields, each closes a gap the main LLM
 can't reliably handle from chat history alone:
 
   mood            tone calibration (calm / lost / curious / annoyed)
   level           1..5 comprehension of the CURRENT topic
+  register        1..5 vocabulary the STUDENT speaks in (baby words..expert)
   needs_analogy   should the answer use an everyday analogy
   stt_garbled     low confidence in transcription — ask to repeat
   ref             what 'это / он / то' references back to (or null)
@@ -13,6 +14,8 @@ can't reliably handle from chat history alone:
   style_hint      explicit format instruction from the student
                   ("отвечай короче но так же подробно", "без терминов",
                    "больше примеров") — short imperative or null
+  length          "shorter" / "ok" / "longer" — the student's signal about
+                  answer length; nudges the agent's sentence cap
 
 Defaults to gpt-5.4-nano via OpenAI for cheap ($0.0003/call). Set
 META_LOCAL_MODEL to override; falls back to LM_STUDIO_MODEL_NAME.
@@ -50,11 +53,13 @@ _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 SAFE_DEFAULTS = {
     "mood": "спокоен",
     "level": 3,
+    "register": 3,
     "needs_analogy": False,
     "stt_garbled": False,
     "ref": None,
     "stuck_on": None,
     "style_hint": None,
+    "length": "ok",
 }
 
 
@@ -131,7 +136,7 @@ def extract_student_info(message: str) -> Optional[dict]:
 
 
 # Prompt for the meta call. Seven fields, terse rules, hard JSON-only contract.
-_META_PROMPT_TEMPLATE = """Ты — аналитик учебного диалога. Смотришь на последние реплики и определяешь по студенту семь параметров. Отвечай ТОЛЬКО валидным JSON без markdown.
+_META_PROMPT_TEMPLATE = """Ты — аналитик учебного диалога. Смотришь на последние реплики и определяешь по студенту девять параметров. Отвечай ТОЛЬКО валидным JSON без markdown.
 
 Профиль студента: {profile}
 
@@ -143,14 +148,16 @@ _META_PROMPT_TEMPLATE = """Ты — аналитик учебного диало
 Поля:
 - "mood" — "спокоен" | "растерян" | "любопытен" | "раздражён"
 - "level" — 1..5, насколько студент въезжает в ТЕКУЩУЮ тему (не общий уровень, а здесь и сейчас по последним 3-5 репликам)
+- "register" — 1..5, насколько ПРОФЕССИОНАЛЬНО говорит сам студент (какую лексику использует), НЕ путать с level: 1 — простые бытовые слова; 3 — обычная речь с базовыми терминами; 5 — свободно владеет терминологией предметной области. Смотри на слова студента, а не на то, понял он материал или нет.
 - "needs_analogy" — true ТОЛЬКО если: студент явно не понял ("не понимаю/сложно/проще/что это значит") ИЛИ level<=2. Иначе false.
 - "stt_garbled" — true если в реплике явно несвязные/несуществующие слова, ломаный русский, обрывки — STT мог накосячить. False если речь связная.
 - "ref" — если в текущей реплике есть местоимение/указатель ("это / он / она / тот / та / такой") и непонятно к чему — короткое словосочетание из истории к чему отсылка. Null если ясно или нет отсылки.
 - "stuck_on" — если студент уже 2+ раза за последние 5 реплик возвращается к одной концепции и явно её не схватывает — название концепции одним словом/словосочетанием. Иначе null.
 - "style_hint" — если студент в текущей реплике ЯВНО даёт инструкцию о ФОРМАТЕ ответа (как именно отвечать), извлеки её одним коротким повелительным предложением. Примеры что считается style_hint: "отвечай короче, но так же подробно" → "отвечай короче, при этом сохраняй уровень подробности примеров"; "понятнее, но дольше" → "объясняй понятнее, не сокращай"; "больше примеров" → "давай больше примеров"; "без терминов" → "избегай технических терминов"; "не используй аналогии" → "отвечай без бытовых аналогий". Если студент просто задал вопрос или комментирует содержание, а не формат — null. Не выдумывай, бери только из текущей реплики.
+- "length" — сигнал студента о ДЛИНЕ ответа: "shorter" если просит или намекает короче ("покороче", "слишком много", "не успеваю за тобой", "давай быстрее", "ближе к делу"); "longer" если хочет больше ("и это всё?", "слишком кратко", "хотелось бы поподробнее"); "ok" если про длину ничего не говорит.
 
 Формат ответа (ровно эти ключи):
-{{"mood":"...","level":3,"needs_analogy":false,"stt_garbled":false,"ref":null,"stuck_on":null,"style_hint":null}}"""
+{{"mood":"...","level":3,"register":3,"needs_analogy":false,"stt_garbled":false,"ref":null,"stuck_on":null,"style_hint":null,"length":"ok"}}"""
 
 
 def analyze_context(student_profile: str, last_messages: List[str],

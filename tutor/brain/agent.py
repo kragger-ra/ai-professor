@@ -1,6 +1,6 @@
 """The agent — the brain of the tutor.
 
-PHASE 4 — full nesting on the answer stack.
+PHASE 5 — adaptive layer: register drift, length tuning, mini-lecture.
 
 Per student utterance the agent routes:
   * a pending offer ("вернёмся к…?" / "разобрать отложенный вопрос?")
@@ -14,8 +14,7 @@ Per student utterance the agent routes:
 Generation runs in its own thread and always completes into the `Answer`
 object, so a resume just re-voices stored, finished text — instant, no LLM.
 
-Still stubbed for later phases: mini-lecture checker + adaptive register
-(Phase 5); cross-session memory + profiles (Phase 6).
+Still stubbed for later phases: cross-session memory + profiles (Phase 6).
 """
 from __future__ import annotations
 
@@ -33,14 +32,39 @@ from tutor.brain.prompt import PROFESSOR_GOAL, construct_prompt, create_chat_fro
 from tutor.brain.rag import RagModel
 from tutor.util import log
 
-QA_MAX_SENTENCES = 4
-_LENGTH_RULE = (
-    f"Отвечай кратко и по существу — максимум {QA_MAX_SENTENCES} предложения. "
-    "Это устный ответ, студент слушает, а не читает."
-)
+QA_MAX_SENTENCES = 4              # default answer cap; tuned 2..8 at runtime
 RESPONSE_MAX_TOKENS = 400
+MINILECTURE_MAX_TOKENS = 900      # bigger budget for a confirmed mini-lecture
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
+DEFAULT_REGISTER = 2             # 1..5 vocabulary level; starts simple
+
+
+def _length_rule(max_sentences: int) -> str:
+    return (
+        f"Отвечай кратко и по существу — максимум {max_sentences} предложения. "
+        "Это устный ответ, студент слушает, а не читает."
+    )
+
+
+# Per-register speaking-style line — injected every turn. The agent's own
+# _register drifts one step per turn toward the student's observed register.
+_REGISTER_RULES = {
+    1: "Говори совсем просто, как с новичком: бытовые слова, без терминов.",
+    2: "Говори простым языком, термины — только с короткой расшифровкой.",
+    3: "Обычная разговорная речь, базовые термины можно без расшифровки.",
+    4: "Студент в теме — используй профессиональную терминологию свободно.",
+    5: "Студент на экспертном уровне — говори технически плотно, без упрощений.",
+}
+
+# Mini-lecture: spoken to confirm before launching a long answer.
+_MINILECTURE_OFFER = ("Это будет мини-лекция — большой развёрнутый рассказ. "
+                      "Зачитать?")
+_MINILECTURE_RULE = (
+    "Это мини-лекция: раскрой тему развёрнуто и по порядку — что это такое, "
+    "как работает, пример, типичные ошибки. Говори голосом, без маркеров "
+    "списков, не дроби на крошечные реплики."
+)
 
 _RESUME_RE = re.compile(r"продолж|верн[иёе]|дальше|поехали", re.IGNORECASE)
 _YES_RE = re.compile(r"\bда\b|давай|конечно|ага|хочу|разбер|продолж|верн[иёе]",
@@ -52,6 +76,20 @@ _NO_RE = re.compile(r"\bнет\b|не\s+надо|не\s+нужно|потом|п
 # agent must simply NOT generate a reply.
 _STOP_RE = re.compile(r"^\s*(стоп|стой|хватит|тихо|молчи|помолчи|подожди|погоди)\b",
                       re.IGNORECASE)
+
+# Mini-lecture request — a request verb + a depth word + an explicit topic
+# ("про/о/об X"). A depth word with no topic ("расскажи подробнее") is a
+# manner switch; a depth word with no request verb is the student narrating.
+_DEPTH_RE = re.compile(
+    r"подробн|поподробн|детальн|поглубже|глубже|побольше"
+    r"|развёрнут|развернут|целую\s+лекцию|мини[-\s]?лекци",
+    re.IGNORECASE,
+)
+_TOPIC_RE = re.compile(r"\b(про|об|о)\s+\S", re.IGNORECASE)
+_REQUEST_RE = re.compile(
+    r"расскаж|объясн|опиш|раскро|поясн|давай|\bмож|хочу|хотел",
+    re.IGNORECASE,
+)
 
 _RESUME_BRIDGE = "Возвращаемся к тому, о чём говорили."
 _CONTINUE_BRIDGE = "Продолжаю."
@@ -74,6 +112,8 @@ class AgentThread(threading.Thread):
         self._running = True
         self._personality = DEFAULT_PERSONALITY
         self._manner = "simpler"          # tracked style; switched by voice command
+        self._register = DEFAULT_REGISTER       # 1..5; drifts toward the student
+        self._max_sentences = QA_MAX_SENTENCES  # answer cap; tuned by feedback
         self._history: list[dict] = []
         self._stack = AnswerStack()
         # A proactively spoken offer awaiting a yes/no:
@@ -116,11 +156,18 @@ class AgentThread(threading.Thread):
             if self._is_yes(utterance):
                 if offer["type"] == "return":
                     self._handle_resume()
+                elif offer["type"] == "minilecture":
+                    self._answer_question(offer["question"], nested=False,
+                                          long=True)
                 else:                                  # deferred question
                     self._answer_question(offer["question"], nested=False)
                 return
             if self._is_no(utterance):
-                log("agent", "offer declined")
+                if offer["type"] == "minilecture":
+                    # Declined the long form — still answer, but briefly.
+                    self._answer_question(offer["question"], nested=False)
+                else:
+                    log("agent", "offer declined")
                 return
             # neither yes nor no — a new question; drop the offer, handle below.
 
@@ -133,6 +180,14 @@ class AgentThread(threading.Thread):
         # Resume command — re-voice from memory, no LLM.
         if self._is_resume(utterance) and self._stack.depth > 0:
             self._handle_resume()
+            return
+
+        # Mini-lecture request — confirm before launching a long answer.
+        if self._is_minilecture_request(utterance):
+            self._offer = {"type": "minilecture", "question": utterance}
+            self._offered_for = None
+            log("agent", f"mini-lecture offered: {utterance[:50]!r}")
+            self._speak_line(_MINILECTURE_OFFER)
             return
 
         # Voice commands — course load / list courses / manner switch.
@@ -166,11 +221,21 @@ class AgentThread(threading.Thread):
         u = utterance.strip()
         return len(u) < 40 and bool(_NO_RE.search(u))
 
+    @staticmethod
+    def _is_minilecture_request(utterance: str) -> bool:
+        """A short, directive ask for an in-depth talk on a named topic."""
+        u = utterance.strip()
+        return (len(u) < 90
+                and bool(_REQUEST_RE.search(u))
+                and bool(_DEPTH_RE.search(u))
+                and bool(_TOPIC_RE.search(u)))
+
     # ------------------------------------------------------------------
     # Answering a question
     # ------------------------------------------------------------------
 
-    def _answer_question(self, utterance: str, nested: bool) -> None:
+    def _answer_question(self, utterance: str, nested: bool,
+                         long: bool = False) -> None:
         # meta-agent + RAG retrieval, in parallel.
         recent = [self._turn_text(h) for h in self._history[-5:]]
         meta_future = self._pool.submit(
@@ -180,9 +245,16 @@ class AgentThread(threading.Thread):
         meta_result = meta_future.result()
         rag_context, rag_score = rag_future.result()
 
-        meta_instruction = (
-            _LENGTH_RULE + " " + meta_agent.build_meta_instruction(meta_result)
-        ).strip()
+        # Drift the speaking register + answer-length cap toward the student.
+        self._apply_calibration(meta_result)
+
+        style_rule = (_MINILECTURE_RULE if long
+                      else _length_rule(self._max_sentences))
+        register_rule = _REGISTER_RULES.get(self._register, "")
+        meta_instruction = " ".join(p for p in (
+            style_rule, register_rule,
+            meta_agent.build_meta_instruction(meta_result),
+        ) if p).strip()
         system_prompt = PROFESSOR_GOAL + "\n\n" + construct_prompt(
             rag_context=rag_context,
             personality_key=self._personality,
@@ -199,8 +271,10 @@ class AgentThread(threading.Thread):
             self._stack.clear()           # fresh top-level question
         self._stack.push(answer)          # _handle already checked the cap
         self._offered_for = None
-        log("agent", f"answering ({'nested' if nested else 'fresh'}) — "
-                     f"stack depth {self._stack.depth}")
+        log("agent", f"answering ({'nested' if nested else 'fresh'}"
+                     f"{', mini-lecture' if long else ''}) — depth "
+                     f"{self._stack.depth}, register {self._register}, "
+                     f"cap {self._max_sentences}")
 
         # History in chronological order; the assistant entry keeps a live
         # reference to the Answer so its text fills in as generation streams.
@@ -208,16 +282,34 @@ class AgentThread(threading.Thread):
         self._history.append({"role": "assistant", "answer": answer})
 
         # Generation runs in its own thread — always completes into `answer`.
+        max_tokens = MINILECTURE_MAX_TOKENS if long else RESPONSE_MAX_TOKENS
         threading.Thread(
-            target=self._generate, args=(answer, messages),
+            target=self._generate, args=(answer, messages, max_tokens),
             daemon=True, name="generate",
         ).start()
         self._tts_q.put(answer)
 
-    def _generate(self, answer: Answer, messages: list) -> None:
+    def _apply_calibration(self, meta: dict) -> None:
+        """Persistently calibrate output to the student. The register drifts
+        one step per turn toward the student's observed register; an explicit
+        length signal nudges the sentence cap by two."""
+        target = meta.get("register")
+        if isinstance(target, int) and 1 <= target <= 5:
+            if target > self._register:
+                self._register += 1
+            elif target < self._register:
+                self._register -= 1
+        length = meta.get("length")
+        if length == "shorter":
+            self._max_sentences = max(2, self._max_sentences - 2)
+        elif length == "longer":
+            self._max_sentences = min(8, self._max_sentences + 2)
+
+    def _generate(self, answer: Answer, messages: list,
+                  max_tokens: int) -> None:
         try:
             for sentence in stream_response_sentences(
-                messages, max_tokens=RESPONSE_MAX_TOKENS
+                messages, max_tokens=max_tokens
             ):
                 answer.add_sentence(sentence)
         except Exception as exc:
