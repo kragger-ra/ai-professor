@@ -55,7 +55,7 @@ def main() -> None:
     capture = CaptureThread(
         input_q,
         interrupt,
-        tts_active=None,                       # Phase 3 wires real anti-echo
+        tts_active=playback.speaking,           # anti-echo: raise VAD gate while voicing
         rag_vocab=(rag.get_vocabulary() if rag else set()),
         device_name=_capture_device(),
     )
