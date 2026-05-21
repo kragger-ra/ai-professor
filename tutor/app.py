@@ -19,6 +19,7 @@ import queue
 import threading
 import time
 
+from tutor.audio.ambient import AmbientPlayer
 from tutor.audio.capture import CaptureThread
 from tutor.audio.playback import PlaybackThread
 from tutor.brain.agent import AgentThread
@@ -65,12 +66,18 @@ def main() -> None:
     playback.start()
     capture.start()
 
+    # Quiet ambient background — optional and fail-safe (AMBIENT_SOUND=off
+    # mutes it; any decode or device failure silently disables it).
+    ambient = AmbientPlayer(device_name=os.getenv("SOUND_DEVICE_OUT", ""))
+    ambient.start_room_loop()
+
     # Audible "ready" cue once the mic stream is open — also a live
     # end-to-end check that the TTS chain works.
     if capture.ready.wait(timeout=120):
         cue = Answer(question="", sentences=["Профессор готов. Спрашивай."])
         cue.finish_generation()
         tts_q.put(cue)
+        ambient.play_cat_purr()    # a short calming purr as the tutor comes online
     log("app", "pipeline up — speak to the professor (Ctrl+C to quit)")
 
     try:
@@ -80,6 +87,7 @@ def main() -> None:
         log("app", "shutting down")
     finally:
         capture.stop()
+        ambient.stop()
         # Capture this final session into cross-session memory before exit.
         log("app", "persisting session memory...")
         agent.persist_memory()
