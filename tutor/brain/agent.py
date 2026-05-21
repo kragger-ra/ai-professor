@@ -1,6 +1,6 @@
 """The agent — the brain of the tutor.
 
-PHASE 5 — adaptive layer: register drift, length tuning, mini-lecture.
+PHASE 5 — voice commands, mini-lecture checker, nested-short answers.
 
 Per student utterance the agent routes:
   * a pending offer ("вернёмся к…?" / "разобрать отложенный вопрос?")
@@ -33,32 +33,17 @@ from tutor.brain.prompt import PROFESSOR_GOAL, construct_prompt, create_chat_fro
 from tutor.brain.rag import RagModel
 from tutor.util import log
 
-QA_MAX_SENTENCES = 4              # default answer cap; tuned 2..8 at runtime
 RESPONSE_MAX_TOKENS = 400
 NESTED_MAX_TOKENS = 220           # a nested clarification stays short (2-3 sentences)
 MINILECTURE_MAX_TOKENS = 900      # bigger budget for a confirmed mini-lecture
 META_TIMEOUT_S = 4.0              # cap how long an answer waits on the meta-agent
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
-DEFAULT_REGISTER = 2             # 1..5 vocabulary level; starts simple
 
-
-def _length_rule(max_sentences: int) -> str:
-    return (
-        f"Отвечай кратко и по существу — максимум {max_sentences} предложения. "
-        "Это устный ответ, студент слушает, а не читает."
-    )
-
-
-# Per-register speaking-style line — injected every turn. The agent's own
-# _register drifts one step per turn toward the student's observed register.
-_REGISTER_RULES = {
-    1: "Говори совсем просто, как с новичком: бытовые слова, без терминов.",
-    2: "Говори простым языком, термины — только с короткой расшифровкой.",
-    3: "Обычная разговорная речь, базовые термины можно без расшифровки.",
-    4: "Студент в теме — используй профессиональную терминологию свободно.",
-    5: "Студент на экспертном уровне — говори технически плотно, без упрощений.",
-}
+# Answer length and vocabulary are NOT pre-computed here — the main LLM
+# adapts its own style from the conversation (see PROFESSOR_GOAL). The agent
+# keeps only the two STRUCTURAL rules below: a nested clarification stays
+# short, a confirmed mini-lecture goes long.
 
 # Mini-lecture: spoken to confirm before launching a long answer.
 _MINILECTURE_OFFER = ("Это будет мини-лекция — большой развёрнутый рассказ. "
@@ -135,8 +120,6 @@ class AgentThread(threading.Thread):
         self._running = True
         self._personality = DEFAULT_PERSONALITY
         self._manner = "simpler"          # tracked style; switched by voice command
-        self._register = DEFAULT_REGISTER       # 1..5; drifts toward the student
-        self._max_sentences = QA_MAX_SENTENCES  # answer cap; tuned by feedback
         self._history: list[dict] = []
         self._stack = AnswerStack()
         # A proactively spoken offer awaiting a yes/no:
@@ -306,23 +289,19 @@ class AgentThread(threading.Thread):
             meta_result = dict(meta_agent.SAFE_DEFAULTS)
         rag_context, rag_score = rag_future.result()
 
-        # Drift the speaking register + answer-length cap toward the student.
-        self._apply_calibration(meta_result)
-
-        # mini-lecture: long. nested: a quick mid-explanation clarification,
-        # forced short so the main thread is not lost — UNLESS the student
-        # explicitly switched to the detailed manner. fresh: the tuned cap.
+        # Structural length rule only. mini-lecture: long. nested: a quick
+        # mid-explanation clarification, forced short so the main thread is
+        # not lost — UNLESS the student explicitly asked for the detailed
+        # manner. fresh: no rule here — the main LLM self-adapts length and
+        # vocabulary from the conversation (PROFESSOR_GOAL).
         if long:
             style_rule, max_tokens = _MINILECTURE_RULE, MINILECTURE_MAX_TOKENS
         elif nested and self._manner != "detailed":
             style_rule, max_tokens = _NESTED_RULE, NESTED_MAX_TOKENS
         else:
-            style_rule = _length_rule(self._max_sentences)
-            max_tokens = RESPONSE_MAX_TOKENS
-        register_rule = _REGISTER_RULES.get(self._register, "")
+            style_rule, max_tokens = "", RESPONSE_MAX_TOKENS
         meta_instruction = " ".join(p for p in (
-            style_rule, register_rule,
-            meta_agent.build_meta_instruction(meta_result),
+            style_rule, meta_agent.build_meta_instruction(meta_result),
         ) if p).strip()
         system_prompt = PROFESSOR_GOAL + "\n\n" + construct_prompt(
             rag_context=rag_context,
@@ -342,7 +321,7 @@ class AgentThread(threading.Thread):
         self._offered_for = None
         mode = "mini-lecture" if long else ("nested" if nested else "fresh")
         log("agent", f"answering ({mode}) — depth {self._stack.depth}, "
-                     f"register {self._register}, max_tokens {max_tokens}")
+                     f"max_tokens {max_tokens}")
 
         # History in chronological order; the assistant entry keeps a live
         # reference to the Answer so its text fills in as generation streams.
@@ -355,22 +334,6 @@ class AgentThread(threading.Thread):
             daemon=True, name="generate",
         ).start()
         self._tts_q.put(answer)
-
-    def _apply_calibration(self, meta: dict) -> None:
-        """Persistently calibrate output to the student. The register drifts
-        one step per turn toward the student's observed register; an explicit
-        length signal nudges the sentence cap by two."""
-        target = meta.get("register")
-        if isinstance(target, int) and 1 <= target <= 5:
-            if target > self._register:
-                self._register += 1
-            elif target < self._register:
-                self._register -= 1
-        length = meta.get("length")
-        if length == "shorter":
-            self._max_sentences = max(2, self._max_sentences - 2)
-        elif length == "longer":
-            self._max_sentences = min(8, self._max_sentences + 2)
 
     def _generate(self, answer: Answer, messages: list,
                   max_tokens: int) -> None:
