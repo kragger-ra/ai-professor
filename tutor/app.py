@@ -1,28 +1,37 @@
-"""AI Professor — Tutor v2 entry point.
+"""AI Professor — Tutor v2 entry point (Phase 2: QA base).
 
-Single process. Three worker threads wired by two queues and one interrupt
-event:
+Single process. Worker threads wired by two queues and one interrupt event:
 
     capture/STT  --input_q-->  agent  --tts_q-->  playback
          |                                            ^
          +------------------ interrupt ---------------+
 
-This is the Phase-1 spine: STT / LLM / TTS are stubbed. It proves the
-thread + queue + interrupt contracts before the real components land.
+External servers used: OpenAI API (or local LM Studio) for the LLM,
+LM Studio for RAG embeddings, the Vosk TTS server for synthesis.
 
 Run (from the repo root):
     python -m tutor.app
 """
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import time
 
-from tutor.audio.capture import ConsoleCapture
+from tutor.audio.capture import CaptureThread
 from tutor.audio.playback import PlaybackThread
 from tutor.brain.agent import AgentThread
+from tutor.brain.rag import RagModel
 from tutor.util import log
+
+
+def _capture_device() -> str:
+    """Pick the STT input device from the audio mode."""
+    if os.getenv("AUDIO_MODE", "none").lower() == "meeting":
+        # In meeting mode STT listens to the call audio on Voicemeeter Out B2.
+        return "Voicemeeter Out B2"
+    return os.getenv("SOUND_DEVICE_IN", "")
 
 
 def main() -> None:
@@ -31,15 +40,25 @@ def main() -> None:
     tts_q: queue.Queue = queue.Queue()     # answer sentences   -> playback
     interrupt = threading.Event()          # set the instant the student talks
 
+    # --- RAG model (embeddings + FAISS index) ----------------------------
+    log("app", "loading RAG model (embeddings + FAISS index)...")
+    rag = RagModel()
+
     # --- worker threads --------------------------------------------------
-    agent = AgentThread(input_q, tts_q, interrupt)
+    agent = AgentThread(input_q, tts_q, interrupt, rag)
     playback = PlaybackThread(tts_q, interrupt)
-    capture = ConsoleCapture(input_q, interrupt)
+    capture = CaptureThread(
+        input_q,
+        interrupt,
+        tts_active=None,                       # Phase 3 wires real anti-echo
+        rag_vocab=rag.get_vocabulary(),
+        device_name=_capture_device(),
+    )
 
     agent.start()
     playback.start()
     capture.start()
-    log("app", "pipeline up — type a line to speak to the professor, Ctrl+C to quit")
+    log("app", "pipeline up — speak to the professor (Ctrl+C to quit)")
 
     try:
         while capture.is_alive():
