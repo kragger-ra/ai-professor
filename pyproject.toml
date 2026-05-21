@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ai-professor-tutor"
 version = "2.0.5"
@@ -52,7 +56,10 @@ gpu = [
     "onnxruntime-gpu~=1.23.2"
 ]
 [project.scripts]
-ai-professor-tutor = "main:main"
+ai-professor-tutor = "tutor.app:main"
+
+[tool.setuptools.packages.find]
+include = ["tutor*"]
 
 [tool.uv]
 package = true

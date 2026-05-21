@@ -1,101 +1,116 @@
-# AI Professor — Tutor build
+# AI Professor — Tutor build (v2)
 
-Голосовой ИИ-тьютор для индивидуальной работы студента. Загружает свой курс из `.md`/`.txt`, читает мини-лекции по запросу, проводит quiz с remediation-циклом, ведёт SQLite-профиль слабых тем.
+Голосовой ИИ-тьютор для индивидуальной работы студента. Один процесс, линейный
+голосовой конвейер: микрофон → STT → агент (RAG + LLM) → Vosk-TTS. Загружает свой
+курс из `.md`/`.txt`, отвечает на вопросы голосом, читает мини-лекции по запросу,
+ведёт кросс-сессионную память и профиль студента.
 
 - **Платформа:** ИТМО AI Talent Hub
 - **Трек ВКР:** Образовательный
+- **Ветка:** `tutor-v2`
 - **Парная сборка:** Lecture (ветка `main`) — для аудиторного режима
+
+> v2 — переписанное ядро. Легаси-архитектура (4 процесса + `multiprocessing.Manager`,
+> унаследованная от стримингового агента NetTyan) удалена в Фазе 7. План фаз и
+> статус — `tutor/README.md`.
 
 ## Быстрый старт
 
 ```powershell
 copy .env.example .env
-# По умолчанию: USE_LOCAL_LLM=true, AUDIO_MODE=none
 pip install -e .
 
-# Запустить LM Studio (порт 22227) + Vosk TTS (22232)
-.\start_professor_tutor.bat
+# Запустить LM Studio (порт 22227): модель LLM + bge-m3 для эмбеддингов RAG
+.\start_tutor_v2.bat        # поднимает Vosk-TTS и запускает конвейер
 ```
 
-UI: http://localhost:22229
+Прямой запуск без bat: `python -m tutor.app`. Это консольное приложение — Gradio-UI
+в v2 нет, лог идёт в консоль и `tutor_v2.log`.
 
-> **VoiceMeeter Banana НЕ требуется** в Tutor-сборке. Звук берётся из системных устройств ОС.
-
-Студенческая инструкция: `STUDENT_QUICKSTART.md`. Подготовка RAG-пакета: `docs/RAG_PACKAGE_GUIDE.md`.
+> **VoiceMeeter Banana НЕ требуется** в Tutor-сборке. Звук берётся из системных
+> устройств ОС (свой аудио-роутер — отложенная Фаза 8).
 
 ## Структура проекта
 
 ```
-src/
-  main.py                       # Gradio UI + multiprocessing entry (порт 22229)
-  agent/
-    core_agent.py                # step() loop, interrupt, FSM, voice commands
-    streaming_orchestrator.py    # LLM stream с queue+thread timeout
-    meta_agent.py                # фоновый анализ профиля
-    rag.py                       # FAISS RAG + reload_from_path
-    prompt_generation/           # prompt_constructor + helpers
-  lecture/
-    integration.py               # LectureManager
-    quiz_session.py              # quiz + remediation цикл (hard-cap 3 итерации)
-    student_profiles.py          # SQLite слабые места + recommendations
-    wake_word.py                 # детекция обращений
-  data_collectors/stt/           # faster-whisper STT + VAD
-  tts/
-    simple_tts_handler.py        # queue-level prefetch streaming
-    vosk/                        # Vosk client + sentence splitter + stress
+tutor/                  # v2 пакет — всё ядро здесь
+  app.py                # entry point: поднимает потоки, очереди, interrupt event
+  audio/
+    capture.py          # микрофон + энергетический VAD
+    stt.py              # faster-whisper STT (CUDA)
+    playback.py         # озвучка Answer через Vosk, resumable
+    ambient.py          # тихий эмбиент (луп комнаты + мур кота)
+  brain/
+    agent.py            # цикл агента, перебивание, стек ответов, голос-команды
+    answer.py           # объект «Ответ» + стек (ядро interrupt-resume)
+    llm.py              # стриминг-оркестратор: токены → предложения → TTS
+    lm_client.py        # клиент OpenAI-совместимого LLM (OpenAI / LM Studio)
+    rag.py              # FAISS RAG + reload_from_path (hot-swap корпуса)
+    embeddings.py       # фабрика эмбеддингов (bge-m3)
+    meta.py             # мета-агент: лёгкий пред-полёт перед Q&A
+    prompt.py           # конструктор системного промпта
+    commands.py         # роутер голосовых команд (манера, загрузка курса, пауза)
+    course.py           # конфигурация курса (универсальный преподаватель)
+    profile.py          # профиль студента (одиночный, переживает рестарт)
+    session_memory.py   # кросс-сессионная память (тезисный rolling summary)
+  tts/vosk_client.py    # Vosk-TTS клиент: стриминг, кэш фраз, пост-обработка
+  _smoke_phase*.py      # автотесты фаз 2-4
 tools/
-  prepare_rag_package.py         # CLI: папка с .md/.txt → RAG-пакет + course_config.yml
+  prepare_rag_package.py  # CLI: папка с .md/.txt → RAG-пакет + course_config.yml
 resources/
-  Prompts/                       # personalities_professor.yml
-  course_config.yml              # дефолтные {COURSE_NAME}/{COURSE_TOPIC} (General)
+  Prompts/                # personalities_professor.yml
+  RAG/course_materials/   # дефолтные материалы курса (.md/.txt)
+  course_config.yml       # {COURSE_NAME}/{COURSE_TOPIC} placeholders
 data/
-  student_profiles.db            # SQLite (создаётся автоматически)
-  rag_vector_store/              # FAISS index (заполняется при загрузке курса)
-  current_course.json            # активный курс (cross-process state через mtime-cache)
-  metrics.db                     # SQLite метрики latency / интеракций
+  rag_vector_store/        # FAISS index (заполняется при загрузке курса)
+  session_memory.json      # кросс-сессионная память
+  student_profile.json     # профиль студента
+start_tutor_v2.bat         # launcher (Vosk-TTS + конвейер)
+reset_memory.bat           # сброс session_memory.json + student_profile.json
 ```
 
-## Архитектура (3 процесса)
+## Архитектура (один процесс, 3 потока)
 
 ```
-STT (faster-whisper, CUDA)      CoreAgent (main)             TTS (Vosk)
-     ↓                              ↑    ↓                       ↑
-     ctx_chat ←─── multiprocessing.Manager ─────── tts_queue (prefetch)
-                                    ↓
-                       [LLM stream + RAG + profile + voice commands]
+capture/STT  --input_q-->  agent  --tts_q-->  playback
+     |                                            ^
+     +------------------ interrupt ---------------+
 ```
 
-### LLM-стек
+Потоки связаны двумя `queue.Queue` и одним `threading.Event` прерывания. Ни
+`multiprocessing.Manager`, ни IPC, ни прокси.
 
-- **Default:** LM Studio Gemma 3 E4B (IQ4_XS, локальный, `USE_LOCAL_LLM=true`)
-- **Fallback:** Mistral / Claude / OpenRouter — переключается через Settings tab (требует restart)
-- **ThinkingFilter**: streaming с `TRIGGER_START` маркером отсекает leaked reasoning
-- **Skeleton mechanism**: двухпроходная подготовка лекции (outline → delivery, `[END]` stop). В Tutor **включён** (`USE_SKELETON=true`) и протестирован
+### Ключевые механизмы
 
-### Уникальные фичи Tutor (нет в Lecture)
+- **Объект «Ответ»**: генерация расцеплена с озвучкой. Возврат после перебивания
+  = до-озвучка из памяти БЕЗ повторного LLM-вызова.
+- **Стек ответов**: вложенность 3 уровня, 4-й отбивается фразой + парковка.
+  «продолжай» дочитывает текущий, «вернёмся/назад» поднимает к родителю.
+- **Перебивание**: студент говорит → STT → interrupt event → стоп TTS + break
+  LLM-стрима. Stop-команды («стоп / подождите») — без вызова LLM.
+- **Мета-агент**: лёгкий пред-полёт параллельно RAG (stt_garbled, анафора,
+  stuck-петли, mood, style_hint). Таймаут ожидания 4с.
+- **Кросс-сессионная память + профиль**: тезисный конспект и имя/бэкграунд
+  студента переживают рестарт; сброс — `reset_memory.bat`.
 
-- **Голосовая загрузка RAG**: «загрузи / добавь / подгрузи предмет X из папки Y»
-  → `core_agent._handle_tutor_load_subject` → `rag.reload_from_path` + apply `course_config.yml`
-- **Голосовой выбор темы**: «расскажи мне про X» → `_handle_tutor_topic_lecture` → запуск лекции из RAG
-- **Quiz + remediation**: после лекции 3 вопроса; ≥2 неверных → упрощённое объяснение слабого блока + retest (cap 3 итерации в `quiz_session.MAX_ITERATIONS`)
-- **Профиль студента**: «покажи мой профиль» / «над чем мне поработать» → `_handle_profile_query` → SQLite weak_blocks + рекомендации (личностные поля НЕ озвучиваются)
-- **CLI упаковки курса**: `tools/prepare_rag_package.py` создаёт самодостаточный RAG-пакет с `course_config.yml`
+### LLM / RAG / TTS стек
 
-### Общие механизмы (как в Lecture)
-
-- **Interrupt**: студент говорит → STT транскрибирует → interrupt TTS queue + break LLM stream
-- **Stop-commands**: «стоп / подождите / помолчите» → мгновенная остановка без LLM
-- **Post-interrupt re-entry**, **prefetch TTS**, **LLM timeout 10s**
-- **FSM**: `idle → delivering → qa_audience → qa_quiz → farewell` + remediation branch
+- **LLM**: OpenAI-совместимый API. По умолчанию — локальная Gemma E4B через
+  LM Studio (`USE_LOCAL_LLM=true`); облачный fallback (Mistral / Claude /
+  OpenRouter) переключается в `.env` + рестарт.
+- **RAG**: FAISS, эмбеддинги bge-m3. Hot-swap корпуса через
+  `rag.reload_from_path` (голосовая команда «загрузи <название>»).
+- **STT**: faster-whisper на CUDA, энергетический VAD в `capture.py`.
+- **TTS**: Vosk-TTS сервер (порт 22232) — русский голос с авто-ударениями,
+  паузами по пунктуации, пост-обработкой.
 
 ## Конфигурация
 
-- `.env` — модели, API ключи. Шаблон в `.env.example`. По умолчанию: `USE_LOCAL_LLM=true`, `AUDIO_MODE=none`
-- `resources/Prompts/personalities_professor.yml` — персонаж преподавателя
-- `resources/course_config.yml` — `{COURSE_NAME}` / `{COURSE_TOPIC}` placeholders (cross-process через `data/current_course.json` mtime-cache)
-- TTS: `TTS_BACKEND=vosk`, `VOSK_SPEAKER_ID=4`, `VOSK_TTS_URL=http://localhost:22232`
-- LLM (default): `LM_STUDIO_MODEL_NAME=google/gemma-4-e4b`
-- Audio: `AUDIO_MODE=none` (без VM, default) / `local` / `meeting` (последние две — Lecture-сценарий)
+- `.env` — модели, ключи, аудио-устройства. Шаблон — `.env.example`.
+- `resources/Prompts/personalities_professor.yml` — персонаж преподавателя.
+- `resources/course_config.yml` — `{COURSE_NAME}` / `{COURSE_TOPIC}` placeholders.
+- Подготовка своего курса (RAG-пакета) — `docs/RAG_PACKAGE_GUIDE.md`,
+  CLI `tools/prepare_rag_package.py`.
 
 ## Правила разработки
 
@@ -104,11 +119,19 @@ STT (faster-whisper, CUDA)      CoreAgent (main)             TTS (Vosk)
 - Промпты и персонаж: на русском
 - Конфиги: YAML
 - **Любой обнаруженный хардкод "NetTyan" — удалять немедленно**
-- **Эта сборка живёт в ветке `student-release`** репо `kragger-ra/ai-professor` (отдельная история от Lecture-main)
-- Новый Tutor-only функционал — в `src/lecture/quiz_session.py`, `src/agent/core_agent.py` (handlers `_handle_tutor_*`)
+- Весь код тьютора — в пакете `tutor/`. Каталог `src/` удалён (Фаза 7).
+- Эта сборка живёт в ветке `tutor-v2`.
 
 ## Тестирование
 
-- BDD: `pytest-bdd` 8.x, ~34 Tutor сценария в `tests/bdd/`
-- Ручные сценарии: `MANUAL_BDD_TESTS.md` в корне (часть B)
-- Apробационные баги: `APROBATION_LOG.md` (создаётся студентом при апробации)
+Автотесты фаз — в самом пакете (нужны запущенные LM Studio + Vosk-TTS):
+
+```
+python -m tutor._smoke_phase2   # мозг: вопрос → ответ
+python -m tutor._smoke_phase3   # перебивание + возврат
+python -m tutor._smoke_phase4   # лимит вложенности (3 уровня)
+python -m tutor.brain.answer    # объект «Ответ» и стек
+```
+
+План фаз и команды запуска — `tutor/README.md`. Голосовые команды и
+walkthrough — `docs/VOICE_COMMANDS.md`, `docs/VOICE_WALKTHROUGH.md`.

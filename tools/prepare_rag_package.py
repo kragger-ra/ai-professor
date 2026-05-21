@@ -32,12 +32,6 @@ except ImportError:
     print("ERROR: PyYAML not installed. Run: pip install pyyaml", file=sys.stderr)
     sys.exit(2)
 
-# Allow `from agent.rag import ...` when running from repo root.
-_THIS_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _THIS_DIR.parent
-sys.path.insert(0, str(_REPO_ROOT / "src"))
-
-
 def _iter_text_files(src: Path) -> Iterable[Path]:
     for ext in (".md", ".txt"):
         yield from src.rglob(f"*{ext}")

@@ -18,7 +18,7 @@
 - **Свободные вопросы** во время лекции — прерывание любой фразой, ответ с RAG-контекстом, продолжение лекции.
 - **Quiz + remediation** — после лекции 3 проверочных вопроса; неверные ответы запускают цикл «упрощённое объяснение → retest» (hard-cap 3 итерации).
 - **Профиль студента** — SQLite-память слабых тем; «покажи мой профиль» / «над чем мне поработать» зачитывает рекомендации.
-- **Локальный LLM** по умолчанию — Gemma 3 E4B через LM Studio. В `Settings` tab можно переключить на Mistral / Claude / OpenRouter.
+- **Локальный LLM** по умолчанию — Gemma E4B через LM Studio. Облачный fallback (Mistral / Claude / OpenRouter) переключается в `.env`.
 - **Vosk TTS** — русский голос с авто-ударениями (StressRNN), эмоциями, паузами по пунктуации.
 - **Faster-whisper STT** на CUDA — распознавание ≈1 с на фразу.
 
@@ -45,54 +45,39 @@
 
 ## Архитектура
 
-3 процесса, связанные через `multiprocessing.Manager`:
+Один процесс, 3 рабочих потока, связанные двумя `queue.Queue` и одним
+`threading.Event` прерывания:
 
 ```
-STT (faster-whisper, CUDA)      CoreAgent (main process)        TTS (Vosk)
-  ↓                                 ↑    ↓                       ↑
-  ctx_chat (shared)  ─────────────  │    │  ──────────  tts_queue (prefetch)
-                                    │    │
-                              [LLM stream (LM Studio Gemma)]
-                                    │
-                              [RAG (FAISS) + profile]
+capture/STT  --input_q-->  agent  --tts_q-->  playback
+     |                                            ^
+     +------------------ interrupt ---------------+
 ```
 
+- **Объект «Ответ»**: генерация расцеплена с озвучкой — возврат после перебивания доигрывает из памяти без повторного LLM-вызова
 - **Streaming**: ответ начинает звучать через 2–3 с, прерывается голосом
 - **Stop-commands**: «стоп / подождите / помолчите» → мгновенная пауза без вызова LLM
-- **Skeleton mechanism**: двухпроходная подготовка лекции (outline → delivery) — активна
-- **Settings tab**: hot-swap LLM-бэкенда между LM Studio / Mistral / Claude / OpenRouter (требует restart)
+- **Кросс-сессионная память**: тезисный конспект и профиль студента переживают рестарт
 
 ## Структура проекта
 
 ```
-src/
-  main.py                       # Gradio UI + multiprocessing entry
-  agent/
-    core_agent.py                # step() loop, interrupt, streaming
-    streaming_orchestrator.py    # LLM stream с queue+thread timeout
-    meta_agent.py                # фоновый анализ профиля
-    rag.py                       # FAISS RAG
-    prompt_generation/           # prompt_constructor + helpers
-  lecture/
-    integration.py               # LectureManager + FSM (delivery → qa → quiz → farewell)
-    quiz_session.py              # quiz + remediation
-    student_profiles.py          # SQLite профили
-    wake_word.py                 # детекция обращений / команд
-    voice_commands.py            # «загрузи предмет», «расскажи про», «покажи профиль»
-  data_collectors/stt/           # faster-whisper STT + VAD
-  tts/
-    simple_tts_handler.py        # prefetch streaming
-    vosk/                        # Vosk client + sentence splitter + stress
+tutor/                  # v2 пакет — всё ядро здесь
+  app.py                # entry point: потоки, очереди, interrupt event
+  audio/                # capture (VAD) + STT + Vosk-playback + эмбиент
+  brain/                # агент, объект «Ответ», LLM, RAG, мета-агент, промпт,
+                        #   голос-команды, курс, профиль, кросс-сессионная память
+  tts/vosk_client.py    # Vosk-TTS клиент: стриминг, кэш фраз, пост-обработка
 tools/
-  prepare_rag_package.py         # CLI: папка с .md/.txt → RAG-пакет + course_config.yml
+  prepare_rag_package.py  # CLI: папка с .md/.txt → RAG-пакет + course_config.yml
 resources/
-  Prompts/                       # personalities_professor.yml, instructions
-  course_config.yml              # дефолтные {COURSE_NAME}/{COURSE_TOPIC} (General)
+  Prompts/                # personalities_professor.yml
+  RAG/course_materials/   # дефолтные материалы курса (.md/.txt)
+  course_config.yml       # дефолтные {COURSE_NAME}/{COURSE_TOPIC}
 data/
-  student_profiles.db            # SQLite (создаётся автоматически)
-  rag_vector_store/              # FAISS index (заполняется при загрузке курса)
-  current_course.json            # активный курс (cross-process state)
-  metrics.db                     # SQLite метрики latency / интеракций
+  rag_vector_store/        # FAISS index (заполняется при загрузке курса)
+  session_memory.json      # кросс-сессионная память
+  student_profile.json     # профиль студента
 ```
 
 ## Конфигурация
