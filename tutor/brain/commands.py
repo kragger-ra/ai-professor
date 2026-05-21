@@ -2,7 +2,7 @@
 
 Phase 5 (active): manner-switch, course-load (short + long + bare),
 list-courses.
-Phase 6 (dormant - defined but not routed): profile-query, session-summary.
+Phase 6 (dormant - defined but not routed): session-summary.
 
 Usage::
 
@@ -20,12 +20,10 @@ Agent attributes expected (must be wired in AgentThread before use):
     agent._pool            : ThreadPoolExecutor  -- already exists
     agent._speak_line(text): method  -- already exists
     agent._manner          : str  -- NEW: "simpler" | "neutral" | "detailed"
-    agent._profiles        : StudentProfileManager | None  -- Phase 6 only
 """
 from __future__ import annotations
 
 import difflib
-import json
 import os
 import re
 import traceback
@@ -399,99 +397,6 @@ def _handle_list_courses(agent: "AgentThread", utterance: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PROFILE QUERY
-# ---------------------------------------------------------------------------
-
-_PROFILE_QUERY_RE = re.compile(
-    r"(?:покажи|расскажи|запроси|давай)\s+(?:мой\s+)?профиль"
-    r"|мой\s+профиль"
-    r"|что\s+ты\s+обо\s+мне\s+(?:знаешь|помнишь)"
-    r"|какие\s+у\s+меня\s+(?:слабые|трудные)\s+места"
-    r"|над\s+чем\s+(?:мне\s+)?поработать",
-    re.IGNORECASE,
-)
-
-_WEAK_TOPIC_LEVEL_MAX = 2
-_TOPIC_LEVEL_LABELS: dict = {
-    1: "начинающий", 2: "базовый", 3: "средний", 4: "продвинутый", 5: "эксперт",
-}
-
-
-def _handle_profile_query(agent: "AgentThread", utterance: str) -> None:
-    """Speak public weak spots from the student profile (no LLM call)."""
-    profiles = getattr(agent, "_profiles", None)
-    current_student = getattr(agent, "_current_student", None)
-
-    if profiles is None or current_student is None:
-        agent._speak_line(
-            "Пока я не знаком с тобой. Назови имя, тогда смогу вести профиль."
-        )
-        return
-
-    try:
-        student = profiles.get_or_create_student(current_student)
-    except Exception as exc:
-        log(_COMPONENT, f"profile read failed: {exc}")
-        traceback.print_exc()
-        agent._speak_line("Не получилось прочитать профиль, попробуй позже.")
-        return
-
-    if student.get("total_interactions", 0) < 2:
-        agent._speak_line(
-            "Пока недостаточно данных. Давай поработаем над материалом — позже покажу."
-        )
-        return
-
-    issues_raw = student.get("known_issues") or "[]"
-    try:
-        issues = (
-            json.loads(issues_raw) if isinstance(issues_raw, str) else list(issues_raw)
-        )
-    except Exception:
-        issues = []
-
-    topic_levels_raw = student.get("topic_levels") or "{}"
-    try:
-        topic_levels = (
-            json.loads(topic_levels_raw)
-            if isinstance(topic_levels_raw, str)
-            else {}
-        )
-    except Exception:
-        topic_levels = {}
-
-    weak_topics = [
-        t for t, lvl in topic_levels.items()
-        if isinstance(lvl, int) and lvl <= _WEAK_TOPIC_LEVEL_MAX
-    ]
-
-    parts = []
-    if issues:
-        parts.append(
-            "По нашим занятиям вижу следующие трудности: "
-            + ", ".join(issues[:3]) + "."
-        )
-    if weak_topics:
-        parts.append("Слабее всего темы: " + ", ".join(weak_topics[:3]) + ".")
-        parts.append(
-            "Рекомендую вернуться и проработать " + weak_topics[0] + " подробнее."
-        )
-    elif issues:
-        parts.append("Рекомендую повторить разделы где были трудности.")
-
-    if not parts:
-        phrase = (
-            "Слабых мест пока не вижу. "
-            "Идём дальше — спрашивай или выбирай новую тему."
-        )
-    else:
-        phrase = " ".join(parts)
-
-    agent._speak_line(phrase)
-    log(_COMPONENT, f"profile query spoken for student='{current_student}'")
-
-
-# ---------------------------------------------------------------------------
 # SESSION SUMMARY
 # ---------------------------------------------------------------------------
 
@@ -602,10 +507,9 @@ _ROUTE_TABLE = (
     #    the spoken name resolves to a real course before routing.
     (_LOAD_BARE_RE, _bare_load_guard, _handle_load_bare),
 
-    # Phase 6 (dormant) - _handle_profile_query and _handle_session_summary
-    # are defined above but intentionally NOT routed yet: profile queries
-    # need the StudentProfileManager and session summary overlaps with the
-    # cross-session memory, both of which land in Phase 6.
+    # Phase 6 (dormant) - _handle_session_summary is defined above but
+    # intentionally NOT routed yet: it overlaps with the cross-session
+    # memory summary.
 )
 
 

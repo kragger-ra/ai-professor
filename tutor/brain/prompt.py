@@ -87,7 +87,7 @@ def construct_prompt(
     Args:
         rag_context:      Retrieved course material text (may be empty/None).
         personality_key:  Key in personalities_professor.yml, e.g. "professor_simpler".
-        student_profile:  Pre-formatted profile string from StudentProfileManager.
+        student_profile:  Pre-formatted profile string from StudentProfile.
         meta_instruction: Short directive from the meta-agent.
         rag_score:        L2 distance from FAISS (lower = more relevant).
         past_sessions:    Thesis-level summary of earlier sessions (may be empty).
