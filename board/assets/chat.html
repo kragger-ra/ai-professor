@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>AI Professor — чат</title>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<style>
+  html, body { height:100%; }
+  body {
+    background:#0e0e0e; color:#d6d6d6;
+    font-family:-apple-system, "Segoe UI", Roboto, sans-serif;
+    margin:0; padding:14px 14px 60px; font-size:17px; line-height:1.55;
+  }
+  h1 {
+    color:#777; font-size:11px; text-transform:uppercase;
+    letter-spacing:1.4px; margin:0 0 12px; font-weight:500;
+  }
+  #chat { display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+  .msg {
+    padding:8px 12px;
+    border-radius:14px;
+    width:fit-content;
+    max-width:min(560px, 92%);
+    word-wrap:break-word; overflow-wrap:break-word;
+    white-space:pre-wrap; box-sizing:border-box;
+    position:relative;
+  }
+  .msg.user {
+    background:#2c5282; align-self:flex-end;
+    border-bottom-right-radius:4px;
+  }
+  .msg.prof {
+    background:#232323; align-self:flex-start;
+    border-bottom-left-radius:4px;
+    padding-right:32px;    /* room for speaker icon */
+  }
+  .msg.prof .speak {
+    position:absolute; top:6px; right:6px;
+    width:22px; height:22px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    background:transparent; color:#9ca; cursor:pointer;
+    transition:background-color .12s, color .12s;
+  }
+  .msg.prof .speak:hover { background:#3a4a3a; color:#fff; }
+  .msg.prof .speak svg { width:14px; height:14px; }
+  .sep {
+    color:#555; text-align:center; font-size:10px;
+    margin:14px 0 8px; border-top:1px dashed #2a2a2a;
+    padding-top:6px; letter-spacing:.5px; align-self:stretch;
+  }
+  /* Small "system" line for an action the user triggered via the board's
+     right-click menu — visually distinct from a real chat message. */
+  .intent {
+    color:#7c8c80; font-size:13px; font-style:italic;
+    padding:5px 10px; margin:8px 0; align-self:stretch;
+    border-top:1px dashed #1f2a23; border-bottom:1px dashed #1f2a23;
+    text-align:center; letter-spacing:.3px;
+    background:#11161300;
+  }
+  .intent .intent-act { color:#a8b8aa; font-style:normal;
+    text-transform:lowercase; font-weight:600; margin-right:4px; }
+  .intent .intent-text { color:#888; }
+  /* Context menu — same look as on the board side */
+  #ctx {
+    position:fixed; display:none; z-index:9999;
+    background:#1e2422; border:1px solid #3a4a3a; border-radius:6px;
+    box-shadow:0 6px 20px rgba(0,0,0,.6); padding:4px; min-width:200px;
+    font-size:13px;
+  }
+  #ctx .ctx-item { padding:7px 12px; border-radius:4px; cursor:pointer; color:#dcdcdc; }
+  #ctx .ctx-item:hover { background:#2c5282; color:#fff; }
+  #ctx .ctx-sep { height:1px; background:#3a4a3a; margin:4px 0; }
+  ::-webkit-scrollbar { width:8px; }
+  ::-webkit-scrollbar-track { background:#161616; }
+  ::-webkit-scrollbar-thumb { background:#333; border-radius:4px; }
+  ::-webkit-scrollbar-thumb:hover { background:#4a4a4a; }
+</style>
+</head>
+<body>
+<h1>Диалог</h1>
+<div id="chat"></div>
+<div id="ctx"></div>
+
+<script>
+  let bridge = null;
+  new QWebChannel(qt.webChannelTransport, function(ch) {
+    bridge = ch.objects.bridge;
+  });
+
+  const _SPEAKER_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">' +
+    '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 16.5 12z' +
+    'M14 3.23v2.06A6.5 6.5 0 0 1 14 18.71v2.06A8.5 8.5 0 0 0 14 3.23z"/>' +
+    '</svg>';
+
+  function _injectSpeaker(node) {
+    if (!node.classList.contains('prof')) return;
+    if (node.querySelector('.speak')) return;
+    const btn = document.createElement('div');
+    btn.className = 'speak';
+    btn.title = 'Прочитать вслух';
+    btn.innerHTML = _SPEAKER_SVG;
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (!bridge) return;
+      // Read the bubble's text without the icon node.
+      const clone = node.cloneNode(true);
+      const ic = clone.querySelector('.speak'); if (ic) ic.remove();
+      bridge.read_aloud(clone.textContent.trim());
+    });
+    node.appendChild(btn);
+  }
+
+  let _stickyBottom = true;
+  window.addEventListener('scroll', () => {
+    const dist = document.documentElement.scrollHeight
+               - window.innerHeight - window.scrollY;
+    _stickyBottom = dist < 40;
+  }, { passive: true });
+
+  function appendMsg(html) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const chat = document.getElementById('chat');
+    while (wrap.firstChild) {
+      const node = wrap.firstChild;
+      chat.appendChild(node);
+      if (node.classList && node.classList.contains('msg')) _injectSpeaker(node);
+    }
+    if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
+  }
+  function clearChat() {
+    document.getElementById('chat').innerHTML = '';
+    _stickyBottom = true;
+  }
+  function scrollBottom() {
+    window.scrollTo(0, document.body.scrollHeight);
+    _stickyBottom = true;
+  }
+  function scrollTop() {
+    window.scrollTo(0, 0);
+    _stickyBottom = false;
+  }
+
+  const _INTENT_LABELS = {
+    read:         'зачитать',
+    read_formula: 'зачитать формулу',
+    explain:      'объяснить',
+    insert:       'вставить в чат'
+  };
+  function appendIntent(label, text) {
+    const lab = _INTENT_LABELS[label] || label;
+    const div = document.createElement('div');
+    div.className = 'intent';
+    const act = document.createElement('span');
+    act.className = 'intent-act';
+    act.textContent = lab + ':';
+    const tx = document.createElement('span');
+    tx.className = 'intent-text';
+    tx.textContent = ' ' + text;
+    div.appendChild(act);
+    div.appendChild(tx);
+    document.getElementById('chat').appendChild(div);
+    if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
+  }
+
+  // RMB on free selection — Read aloud / Explain
+  document.addEventListener('contextmenu', (ev) => {
+    if (ev.target.closest('#ctx')) { ev.preventDefault(); return; }
+    const sel = window.getSelection().toString().trim();
+    if (!sel) return;
+    ev.preventDefault();
+    _showCtx(ev.clientX, ev.clientY, sel);
+  });
+  document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('#ctx')) _hideCtx();
+  });
+
+  function _showCtx(x, y, text) {
+    const ctx = document.getElementById('ctx');
+    ctx.innerHTML =
+      '<div class="ctx-item" data-act="read">Прочитать вслух</div>' +
+      '<div class="ctx-item" data-act="explain">Объяснить смысл</div>' +
+      '<div class="ctx-sep"></div>' +
+      '<div class="ctx-item" data-act="insert">Вставить в чат</div>';
+    ctx.style.left = x + 'px';
+    ctx.style.top  = y + 'px';
+    ctx.style.display = 'block';
+    ctx.querySelectorAll('.ctx-item').forEach(el => {
+      el.addEventListener('click', () => {
+        if (!bridge) return _hideCtx();
+        const act = el.getAttribute('data-act');
+        if (act === 'read')        bridge.read_aloud(text);
+        else if (act === 'explain') bridge.explain(text);
+        else if (act === 'insert')  bridge.insert_into_chat(text);
+        _hideCtx();
+      });
+    });
+  }
+  function _hideCtx() { document.getElementById('ctx').style.display = 'none'; }
+</script>
+</body>
+</html>

@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>AI Professor — доска</title>
+<link rel="stylesheet" href="katex/katex.min.css">
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script defer src="katex/katex.min.js"></script>
+<script defer src="katex/contrib/auto-render.min.js"></script>
+<style>
+  html, body { height:100%; }
+  body {
+    background:#0d1110;
+    color:#ebebeb;
+    font-family:-apple-system, "Segoe UI", Roboto, sans-serif;
+    margin:0;
+    padding:30px 40px 100px;
+    font-size:22px;
+    line-height:1.6;
+  }
+  h1 {
+    color:#888; font-size:14px; text-transform:uppercase;
+    letter-spacing:2px; margin:0 0 24px; font-weight:500;
+  }
+  /* Interactive items — no hover frame. Select with the mouse or with
+     a double-click (selects the whole item) and right-click. */
+  .term, .fact, .formula, .code {
+    position:relative;
+    padding:6px 10px;
+    margin:14px -10px;
+    border-radius:6px;
+  }
+  .term strong { color:#fff; font-weight:700; letter-spacing:.3px; }
+  .formula { margin:22px -10px; text-align:left; overflow-x:auto; }
+  /* Native selection highlight — chalk-blue on dark, only the selected
+     run of characters lights up, never the whole block. */
+  ::selection { background:#2c5282; color:#fff; }
+  /* Comments — anchor mark on the board + side panel (Word-style). */
+  mark.comment-anchor {
+    background:rgba(200,162,58,0.18);
+    color:inherit;
+    border-radius:2px;
+    padding:0 2px;
+    cursor:pointer;
+  }
+  mark.comment-anchor:hover { background:rgba(200,162,58,0.40); }
+  body.comments-open { padding-right:316px; transition:padding-right .2s ease; }
+  #comments-panel {
+    position:fixed; top:0; right:0; width:300px; height:100%;
+    background:#161a17; border-left:1px solid #2a3a2a;
+    padding:22px 16px 60px; overflow-y:auto; box-sizing:border-box;
+    transform:translateX(100%); transition:transform .2s ease; z-index:50;
+  }
+  #comments-panel.open { transform:translateX(0); }
+  #comments-panel h2 {
+    font-size:11px; color:#888; text-transform:uppercase;
+    letter-spacing:1.5px; margin:0 0 14px; font-weight:500;
+  }
+  .comment-card {
+    background:#1a201c; border-left:3px solid #c8a23a;
+    padding:8px 10px; margin:8px 0; border-radius:4px;
+    font-size:12px; cursor:pointer;
+    transition:background-color .12s;
+  }
+  .comment-card:hover { background:#22291f; }
+  .comment-card .anchor {
+    color:#888; font-size:10px; font-style:italic; margin-bottom:4px;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+  .comment-card .note { color:#e0e0e0; }
+  .comment-card .meta {
+    color:#666; font-size:10px; margin-top:4px;
+    display:flex; justify-content:flex-end;
+  }
+  .comment-card .del { color:#a05858; cursor:pointer; }
+  .comment-card .del:hover { color:#d47272; }
+  #comments-empty {
+    color:#555; font-size:11px; font-style:italic; padding:6px 0;
+  }
+  .warn { margin:14px 0; color:#d4c266; font-style:italic; }
+  .code {
+    background:transparent; color:#ebebeb;
+    font-family:Consolas, "Cascadia Code", monospace;
+    font-size:18px; white-space:pre; overflow-x:auto;
+  }
+  .sep {
+    color:#5a5a5a; text-align:center; font-size:11px;
+    margin:34px 0 22px; border-top:1px dashed #2a3a2a;
+    padding-top:8px; letter-spacing:1px;
+  }
+  /* Pencil-line separator between successive professor answers. */
+  hr.topic-sep {
+    border:0; height:0;
+    border-top:1px dashed #3a4a3a;
+    margin:36px 0 28px;
+    width:80%;
+    margin-left:auto; margin-right:auto;
+  }
+  .katex, .katex *, .katex .mathnormal, .katex .mord, .katex .mbin,
+  .katex .mrel, .katex .mop, .katex .mpunct, .katex .minner {
+    color:#ebebeb !important;
+  }
+  .katex { font-size:1.18em; }
+  .formula .katex-display { margin:.4em 0; text-align:left; }
+  /* Context menu */
+  #ctx {
+    position:fixed; display:none; z-index:9999;
+    background:#1e2422; border:1px solid #3a4a3a; border-radius:6px;
+    box-shadow:0 6px 20px rgba(0,0,0,.6); padding:4px; min-width:200px;
+    font-size:13px;
+  }
+  #ctx .ctx-item {
+    padding:7px 12px; border-radius:4px; cursor:pointer; color:#dcdcdc;
+  }
+  #ctx .ctx-item:hover { background:#2c5282; color:#fff; }
+  #ctx .ctx-sep { height:1px; background:#3a4a3a; margin:4px 0; }
+  ::-webkit-scrollbar { width:10px; }
+  ::-webkit-scrollbar-track { background:#0d1110; }
+  ::-webkit-scrollbar-thumb { background:#2a3a2a; border-radius:5px; }
+  ::-webkit-scrollbar-thumb:hover { background:#3a4a3a; }
+</style>
+</head>
+<body>
+<h1>Доска</h1>
+<div id="board"></div>
+
+<div id="comments-panel">
+  <h2>Примечания</h2>
+  <div id="comments-list"></div>
+  <div id="comments-empty">Выдели текст или формулу и нажми ПКМ → «Комментарий».</div>
+</div>
+
+<div id="ctx"></div>
+
+<script>
+  // ---------- Bridge to Python via QWebChannel ----------
+  let bridge = null;
+  new QWebChannel(qt.webChannelTransport, function(ch) {
+    bridge = ch.objects.bridge;
+  });
+
+  // ---------- KaTeX render ----------
+  const KATEX_OPTS = {
+    delimiters: [
+      { left: "$$", right: "$$", display: true },
+      { left: "\\[", right: "\\]", display: true },
+      { left: "$",  right: "$",  display: false },
+      { left: "\\(", right: "\\)", display: false }
+    ],
+    throwOnError: false, errorColor: "#e25555"
+  };
+  function _renderMath(node) {
+    if (window.renderMathInElement) {
+      try { renderMathInElement(node, KATEX_OPTS); } catch(e) {}
+    }
+  }
+  // Sticky-bottom autoscroll: only follow new content when the user is
+  // already near the bottom; otherwise leave their scroll position alone.
+  let _stickyBottom = true;
+  window.addEventListener('scroll', () => {
+    const dist = document.documentElement.scrollHeight
+               - window.innerHeight - window.scrollY;
+    _stickyBottom = dist < 40;
+  }, { passive: true });
+  function appendItem(html) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    const board = document.getElementById('board');
+    while (wrap.firstChild) board.appendChild(wrap.firstChild);
+    _renderMath(board);
+    if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
+  }
+  function clearBoard() {
+    document.getElementById('board').innerHTML = '';
+    _stickyBottom = true;
+  }
+  function scrollBottom() {
+    window.scrollTo(0, document.body.scrollHeight);
+    _stickyBottom = true;
+  }
+  function scrollTop() {
+    window.scrollTo(0, 0);
+    _stickyBottom = false;
+  }
+  window.addEventListener('load', () => _renderMath(document.body));
+
+  // ---------- Double-click on a known item: select the whole item ----------
+  // The user can also drag-select a partial run of text inside an item;
+  // both paths produce a window selection that the RMB menu acts on.
+  document.addEventListener('dblclick', (ev) => {
+    const it = ev.target.closest('.term, .fact, .formula, .code');
+    if (!it) return;
+    const range = document.createRange();
+    range.selectNodeContents(it);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    ev.preventDefault();
+  });
+
+  // ---------- RMB on any non-empty selection → context menu ----------
+  document.addEventListener('contextmenu', (ev) => {
+    if (ev.target.closest('#ctx')) { ev.preventDefault(); return; }
+    const info = _selectionInfo();
+    if (!info) return;             // empty selection → let default menu show
+    ev.preventDefault();
+    _showCtx(ev.clientX, ev.clientY, info);
+  });
+  document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('#ctx')) _hideCtx();
+  });
+
+  function _selectionInfo() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const text = sel.toString().trim();
+    if (!text) return null;
+    // Detect whether the selection sits inside a single .formula and covers
+    // (almost) its whole rendered text — only then can we hand the raw LaTeX
+    // to "Read aloud (formula in words)".
+    const range = sel.getRangeAt(0);
+    let node = range.commonAncestorContainer;
+    if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+    const formula = node ? node.closest('.formula') : null;
+    const parentItem = node ? node.closest('.term, .fact, .formula, .code') : null;
+
+    let isWholeFormula = false;
+    let latex = null;
+    if (formula && formula.dataset.latex) {
+      const norm = s => s.replace(/\s+/g, ' ').trim();
+      const fullText = norm(formula.textContent);
+      const selText = norm(text);
+      isWholeFormula = (selText === fullText) ||
+                       (fullText.length > 0 &&
+                        selText.length >= Math.floor(fullText.length * 0.9));
+      latex = formula.dataset.latex;
+    }
+
+    // Surrounding context — the parent item's full text, if the selection is
+    // strictly a fragment of it. Lets the tutor understand short selections
+    // like "dx" or "ln|x|" that are meaningless without their formula/term.
+    let contextText = null;
+    if (parentItem) {
+      const parentRaw = (formula && formula.dataset.latex)
+        ? formula.dataset.latex
+        : parentItem.textContent;
+      const parentNorm = parentRaw.replace(/\s+/g, ' ').trim();
+      const selNorm = text.replace(/\s+/g, ' ').trim();
+      if (parentNorm && parentNorm !== selNorm
+          && parentNorm.length > selNorm.length) {
+        contextText = parentNorm;
+      }
+    }
+
+    return {
+      text: text,
+      isFormula: isWholeFormula,
+      latex: isWholeFormula ? latex : null,
+      contextText: contextText
+    };
+  }
+
+  function _withContext(info) {
+    if (!info.contextText) return info.text;
+    return `Контекст: «${info.contextText}». Выделено: «${info.text}».`;
+  }
+
+  function _showCtx(x, y, info) {
+    const ctx = document.getElementById('ctx');
+    const readLabel = info.isFormula
+      ? 'Прочитать вслух (формулу словами)'
+      : 'Прочитать вслух';
+    ctx.innerHTML =
+      `<div class="ctx-item" data-act="read">${readLabel}</div>` +
+      `<div class="ctx-item" data-act="explain">Объяснить смысл</div>` +
+      `<div class="ctx-sep"></div>` +
+      `<div class="ctx-item" data-act="comment">Комментарий…</div>` +
+      `<div class="ctx-item" data-act="insert">Вставить в чат</div>`;
+    ctx.style.left = x + 'px';
+    ctx.style.top  = y + 'px';
+    ctx.style.display = 'block';
+    ctx.querySelectorAll('.ctx-item').forEach(el => {
+      el.addEventListener('click', () => {
+        if (!bridge) return _hideCtx();
+        const act = el.getAttribute('data-act');
+        if (act === 'read') {
+          // TTS воспроизводит дословно — контекст подмешивать НЕЛЬЗЯ,
+          // иначе он скажет вслух «контекст», «выделено» и обёртку.
+          if (info.isFormula) bridge.read_formula(info.latex);
+          else bridge.read_aloud(info.text);
+        } else if (act === 'explain') {
+          // LLM-explain: контекст помогает, маленький фрагмент без него
+          // часто бессмыслен («dx» вне ∫f(x)dx).
+          bridge.explain(_withContext(info));
+        } else if (act === 'insert') {
+          bridge.insert_into_chat(info.text);
+        } else if (act === 'comment') {
+          bridge.request_comment(info.text);
+        }
+        _hideCtx();
+      });
+    });
+  }
+  function _hideCtx() { document.getElementById('ctx').style.display = 'none'; }
+
+  // ---------- Comments ----------
+  function showComments() {
+    document.getElementById('comments-panel').classList.add('open');
+    document.body.classList.add('comments-open');
+  }
+  function hideComments() {
+    document.getElementById('comments-panel').classList.remove('open');
+    document.body.classList.remove('comments-open');
+  }
+  function toggleComments() {
+    if (document.getElementById('comments-panel').classList.contains('open')) {
+      hideComments();
+    } else {
+      showComments();
+    }
+  }
+  function applyComment(data) {
+    if (!data || !data.id) return;
+    // Idempotent — events from the JSONL tail can re-fire on reload.
+    if (document.querySelector('mark.comment-anchor[data-cid="' + data.id + '"]')) return;
+    _highlightAnchorIn(document.getElementById('board'), data.anchor, data.id);
+    const list = document.getElementById('comments-list');
+    if (!list) return;
+    const empty = document.getElementById('comments-empty');
+    if (empty) empty.style.display = 'none';
+    if (list.querySelector('[data-cid="' + data.id + '"]')) return;
+    const card = document.createElement('div');
+    card.className = 'comment-card';
+    card.dataset.cid = data.id;
+    const anchor = document.createElement('div');
+    anchor.className = 'anchor';
+    anchor.textContent = '«' + (data.anchor || '') + '»';
+    const note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = data.note || '';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const del = document.createElement('span');
+    del.className = 'del';
+    del.textContent = '✕ удалить';
+    del.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (bridge) bridge.remove_comment(data.id);
+      // Local UI is updated when the comment_removed event echoes back via
+      // the JSONL tail; the IPC round-trip is ~200ms.
+    });
+    meta.appendChild(del);
+    card.appendChild(anchor);
+    card.appendChild(note);
+    card.appendChild(meta);
+    card.addEventListener('click', () => {
+      const m = document.querySelector('mark.comment-anchor[data-cid="' + data.id + '"]');
+      if (m) m.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    list.appendChild(card);
+  }
+  function removeComment(cid) {
+    const card = document.querySelector(
+      '#comments-list .comment-card[data-cid="' + cid + '"]');
+    if (card) card.remove();
+    const mark = document.querySelector(
+      'mark.comment-anchor[data-cid="' + cid + '"]');
+    if (mark) {
+      const txt = document.createTextNode(mark.textContent);
+      mark.parentNode.replaceChild(txt, mark);
+    }
+    const list = document.getElementById('comments-list');
+    if (list && list.children.length === 0) {
+      const empty = document.getElementById('comments-empty');
+      if (empty) empty.style.display = 'block';
+    }
+  }
+  function _highlightAnchorIn(root, text, cid) {
+    if (!root || !text) return;
+    const target = text.trim();
+    if (!target) return;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.parentElement &&
+          node.parentElement.closest('mark.comment-anchor')) continue;
+      const orig = node.nodeValue;
+      const idx = orig.indexOf(target);
+      if (idx >= 0) {
+        const before = orig.substring(0, idx);
+        const after  = orig.substring(idx + target.length);
+        const mark = document.createElement('mark');
+        mark.className = 'comment-anchor';
+        mark.dataset.cid = cid;
+        mark.textContent = target;
+        const beforeNode = document.createTextNode(before);
+        const afterNode  = document.createTextNode(after);
+        const parent = node.parentNode;
+        parent.replaceChild(afterNode, node);
+        parent.insertBefore(mark, afterNode);
+        parent.insertBefore(beforeNode, mark);
+        return;
+      }
+    }
+    // Anchor text not found in a single text node (e.g. spans KaTeX-rendered
+    // children). Skip silently — the comment still shows in the side panel.
+  }
+
+  // Patch appendItem to stash raw LaTeX on .formula nodes BEFORE KaTeX rewrites them.
+  const _origAppend = appendItem;
+  appendItem = function(html) {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = html;
+    wrap.querySelectorAll('.formula').forEach(el => {
+      // Extract the raw $$...$$ source before KaTeX consumes it.
+      const m = el.textContent.match(/\$\$([\s\S]*?)\$\$/);
+      el.dataset.latex = m ? m[1].trim() : el.textContent.trim();
+    });
+    const board = document.getElementById('board');
+    while (wrap.firstChild) board.appendChild(wrap.firstChild);
+    _renderMath(board);
+    if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
+  };
+</script>
+</body>
+</html>

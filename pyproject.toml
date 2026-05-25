@@ -55,11 +55,15 @@ stt = [
 gpu = [
     "onnxruntime-gpu~=1.23.2"
 ]
+board = [
+    "PySide6~=6.7",
+]
 [project.scripts]
 ai-professor-tutor = "tutor.app:main"
+ai-professor-board = "board.app:main"
 
 [tool.setuptools.packages.find]
-include = ["tutor*"]
+include = ["tutor*", "board*"]
 
 [tool.uv]
 package = true

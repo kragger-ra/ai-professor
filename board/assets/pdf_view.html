@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>__TITLE__</title>
+<script src="pdfjs/pdf.min.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<style>
+  html, body { height:100%; margin:0; }
+  body {
+    background:#1a1c1b;
+    color:#dcdcdc;
+    font-family:-apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #status {
+    padding:20px 32px;
+    color:#aaa;
+    font-size:13px;
+  }
+  #pdf-container {
+    display:flex; flex-direction:column;
+    align-items:center; gap:18px;
+    padding:18px 0 60px;
+  }
+  .page-wrapper {
+    position:relative;
+    box-shadow:0 4px 18px rgba(0,0,0,.5);
+    background:#fff;
+  }
+  .page-wrapper canvas { display:block; }
+  /* PDF.js v3 text layer — transparent overlay on canvas, selectable.
+     `--scale-factor` is read by PDF.js to position each span correctly. */
+  .textLayer {
+    position:absolute; top:0; left:0; right:0; bottom:0;
+    overflow:hidden;
+    opacity:.25;
+    line-height:1;
+    user-select:text;
+    forced-color-adjust:none;
+  }
+  .textLayer span, .textLayer br {
+    color:transparent;
+    position:absolute;
+    white-space:pre;
+    cursor:text;
+    transform-origin:0% 0%;
+  }
+  .textLayer span.markedContent {
+    top:0; height:0; line-height:1;
+  }
+  .textLayer .endOfContent {
+    display:block; position:absolute;
+    left:0; top:100%; right:0; bottom:0;
+    z-index:0; cursor:default;
+    user-select:none;
+  }
+  .textLayer.selecting .endOfContent { top:0; }
+  .textLayer ::selection {
+    background:rgba(20, 80, 180, 0.85);
+    color:transparent;
+  }
+  /* Context menu — same look as on the chalkboard. */
+  #ctx {
+    position:fixed; display:none; z-index:9999;
+    background:#1e2422; border:1px solid #3a4a3a; border-radius:6px;
+    box-shadow:0 6px 20px rgba(0,0,0,.6); padding:4px; min-width:220px;
+    font-size:14px;
+  }
+  #ctx .ctx-item { padding:7px 14px; border-radius:4px; cursor:pointer; color:#dcdcdc; }
+  #ctx .ctx-item:hover { background:#2c5282; color:#fff; }
+  #ctx .ctx-sep { height:1px; background:#3a4a3a; margin:4px 6px; }
+  ::-webkit-scrollbar { width:10px; }
+  ::-webkit-scrollbar-track { background:#0d1110; }
+  ::-webkit-scrollbar-thumb { background:#2a3a2a; border-radius:5px; }
+  ::-webkit-scrollbar-thumb:hover { background:#3a4a3a; }
+</style>
+</head>
+<body>
+<div id="status">Загружаю PDF…</div>
+<div id="pdf-container"></div>
+<div id="ctx"></div>
+
+<script>
+  // ---------- Bridge to Python ----------
+  let bridge = null;
+  new QWebChannel(qt.webChannelTransport, function(ch) {
+    bridge = ch.objects.bridge;
+  });
+
+  // ---------- Constants substituted by Python on load ----------
+  const PDF_URL  = "__PDF_URL__";
+  const DOC_NAME = "__DOC_NAME__";
+  const SCALE    = 1.5;
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs/pdf.worker.min.js';
+
+  async function loadAndRender() {
+    const status = document.getElementById('status');
+    const container = document.getElementById('pdf-container');
+    try {
+      const loadingTask = pdfjsLib.getDocument({
+        url: PDF_URL,
+        disableAutoFetch: false,
+        disableStream: false,
+      });
+      const pdf = await loadingTask.promise;
+      status.textContent = `${pdf.numPages} стр.`;
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        await renderPage(pdf, pageNum, container);
+      }
+      status.textContent = `${pdf.numPages} стр. — готово.`;
+    } catch (e) {
+      status.textContent = 'Ошибка загрузки PDF: ' + (e && e.message ? e.message : e);
+      console.error(e);
+    }
+  }
+
+  async function renderPage(pdf, pageNum, container) {
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: SCALE });
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'page-wrapper';
+    wrapper.style.width  = viewport.width  + 'px';
+    wrapper.style.height = viewport.height + 'px';
+
+    const canvas = document.createElement('canvas');
+    canvas.width  = viewport.width;
+    canvas.height = viewport.height;
+    wrapper.appendChild(canvas);
+
+    const textLayerDiv = document.createElement('div');
+    textLayerDiv.className = 'textLayer';
+    textLayerDiv.style.width  = viewport.width  + 'px';
+    textLayerDiv.style.height = viewport.height + 'px';
+    // PDF.js v3 reads --scale-factor from CSS to scale text spans.
+    textLayerDiv.style.setProperty('--scale-factor', viewport.scale);
+    wrapper.appendChild(textLayerDiv);
+
+    container.appendChild(wrapper);
+
+    await page.render({
+      canvasContext: canvas.getContext('2d'),
+      viewport: viewport,
+    }).promise;
+
+    try {
+      const textContent = await page.getTextContent();
+      // v3.11 supports both `textContent` (legacy) and `textContentSource`
+      // (newer). Pass the legacy field — most stable across 3.x.
+      const task = pdfjsLib.renderTextLayer({
+        textContent: textContent,
+        container: textLayerDiv,
+        viewport: viewport,
+        textDivs: [],
+      });
+      await task.promise;
+    } catch (e) {
+      console.error('textLayer page ' + pageNum + ': ' + e);
+    }
+  }
+
+  // ---------- Context menu on selection ----------
+  document.addEventListener('contextmenu', (ev) => {
+    if (ev.target.closest('#ctx')) { ev.preventDefault(); return; }
+    const sel = (window.getSelection().toString() || '').trim();
+    if (!sel) return;
+    ev.preventDefault();
+    showCtx(ev.clientX, ev.clientY, sel);
+  });
+  document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('#ctx')) hideCtx();
+  });
+
+  function showCtx(x, y, text) {
+    const ctx = document.getElementById('ctx');
+    ctx.innerHTML =
+      '<div class="ctx-item" data-act="read">Прочитать вслух</div>' +
+      '<div class="ctx-item" data-act="explain">Объяснить смысл</div>' +
+      '<div class="ctx-sep"></div>' +
+      '<div class="ctx-item" data-act="comment">Комментарий…</div>' +
+      '<div class="ctx-item" data-act="insert">Вставить в чат</div>';
+    ctx.style.left = x + 'px';
+    ctx.style.top  = y + 'px';
+    ctx.style.display = 'block';
+    ctx.querySelectorAll('.ctx-item').forEach(el => {
+      el.addEventListener('click', () => {
+        if (!bridge) return hideCtx();
+        const act = el.getAttribute('data-act');
+        if (act === 'read') {
+          // Direct TTS — no wrapping, voice exactly what was selected.
+          bridge.read_aloud(text);
+        } else if (act === 'explain') {
+          bridge.explain('Контекст: документ «' + DOC_NAME + '». Выделено: «' + text + '».');
+        } else if (act === 'insert') {
+          bridge.insert_into_chat(text);
+        } else if (act === 'comment') {
+          bridge.request_comment(text);
+        }
+        hideCtx();
+      });
+    });
+  }
+  function hideCtx() { document.getElementById('ctx').style.display = 'none'; }
+
+  loadAndRender();
+</script>
+</body>
+</html>
