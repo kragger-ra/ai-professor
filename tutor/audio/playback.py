@@ -191,6 +191,9 @@ class PlaybackThread(threading.Thread):
         # Set while a sentence is being voiced — CaptureThread reads this as
         # its anti-echo gate (raise the VAD threshold while the tutor talks).
         self.speaking = threading.Event()
+        # Toggled by the board sidecar via commands.jsonl: while set, drop
+        # any Answer pulled off tts_q without voicing it.
+        self.muted = threading.Event()
         self._audio_processor: Optional[AudioProcessor] = None
 
     def stop(self) -> None:
@@ -210,6 +213,15 @@ class PlaybackThread(threading.Thread):
             # A stale answer queued before an interrupt — a fresh turn has
             # already superseded it; drop it.
             if self._interrupt.is_set():
+                continue
+            if self.muted.is_set():
+                # TTS muted from the board UI — mark the answer fully voiced
+                # so resume logic does not later try to read it aloud, then
+                # silently drop it.
+                try:
+                    answer.mark_voiced(len(answer.sentences))
+                except Exception:
+                    pass
                 continue
             self._voice_answer(answer)
 

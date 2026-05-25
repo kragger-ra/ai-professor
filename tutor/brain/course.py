@@ -97,6 +97,29 @@ def set_current(cfg: "CourseConfig") -> None:
     _cached_cfg = None
 
 
+def set_current_path(path: str) -> None:
+    """Stamp the active course's package path into the persisted state file.
+
+    Course YAML doesn't carry the package path; the board UI needs it to
+    highlight the active course in its manager list. Called by the load
+    handlers after a successful rag.reload_from_path.
+    """
+    try:
+        if _STATE_PATH.exists():
+            with open(str(_STATE_PATH), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+        else:
+            data = {}
+        data["path"] = str(path)
+        os.makedirs(str(_STATE_PATH.parent), exist_ok=True)
+        with open(str(_STATE_PATH), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def get_current() -> "CourseConfig":
     """Return the active CourseConfig.
 

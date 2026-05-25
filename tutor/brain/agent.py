@@ -29,14 +29,17 @@ import re
 import threading
 import traceback
 
+from tutor.board_log import BoardLog
 from tutor.brain import commands
 from tutor.brain import meta as meta_agent
 from tutor.brain.answer import MAX_STACK_DEPTH, Answer, AnswerStack
+from tutor.brain.board_extract import parse_board_block
 from tutor.brain.llm import stream_response_sentences
 from tutor.brain.prompt import PROFESSOR_GOAL, construct_prompt, create_chat_from_prompt
 from tutor.brain.profile import StudentProfile
 from tutor.brain.rag import RagModel
 from tutor.brain.session_memory import SessionMemory
+from tutor.document_store import DocumentStore
 from tutor.util import log
 
 RESPONSE_MAX_TOKENS = 400
@@ -78,7 +81,8 @@ _RETURN_RE = re.compile(r"верн[иёе]|назад|обратно", re.IGNORE
 # pending offer it is NOT a question and must not clear the answer stack.
 _ACK_TOKEN = (r"да|ага|угу|окей|ок|хорошо|ладно|понятно|понятненько|ясно|"
               r"конечно|договорились|давай|давайте|спасибо|ну|вот|я|это|"
-              r"всё|все|уже|понял|поняла|поняли")
+              r"всё|все|уже|понял|поняла|поняли|достаточно|разобрался|"
+              r"разобралась|дошло")
 _ACK_RE = re.compile(
     rf"^[\s,.!?\-—]*(?:(?:{_ACK_TOKEN})[\s,.!?\-—]*){{1,5}}$", re.IGNORECASE)
 _NEGATION_RE = re.compile(r"\b(не|нет|ни)\b", re.IGNORECASE)
@@ -87,10 +91,33 @@ _YES_RE = re.compile(r"\bда\b|давай|конечно|ага|хочу|раз
 _NO_RE = re.compile(r"\bнет\b|не\s+надо|не\s+нужно|потом|позже|не\s+хочу",
                     re.IGNORECASE)
 
+# Comprehension-stop — an acknowledgement that signals the student is done
+# with the explanation, so it should END, not resume. Checked inside the
+# acknowledgement branch: if the bare-filler utterance carries a closure
+# word and no "go on" word, the tutor stops instead of continuing.
+# ("понял, спасибо", "всё ясно", "достаточно", "ну всё", "разобрался")
+_COMPREHENSION_RE = re.compile(
+    r"понял|понятн|поняла|поняли|ясно|разобрал|дошло|достаточно"
+    r"|\bвсё\b|\bвсе\b",
+    re.IGNORECASE)
+_GO_ON_RE = re.compile(r"давай|дальше|ещё|еще|продолж", re.IGNORECASE)
+
 # Stop commands — playback is already halted by the interrupt Event; the
 # agent must simply NOT generate a reply.
-_STOP_RE = re.compile(r"^\s*(стоп|стой|хватит|тихо|молчи|помолчи|подожди|погоди)\b",
-                      re.IGNORECASE)
+_STOP_RE = re.compile(
+    r"^\s*(стоп|стой|хватит|тихо|молчи|помолчи|замолчи|подожди|погоди"
+    r"|остановись|остановите|останови|прекрати|прекратите)\b",
+    re.IGNORECASE)
+
+# Refusal to continue — an explicit "don't go on" in the imperative. The
+# imperative form is the guard: "не продолжай" matches (a stop), while
+# "почему не продолжаешь" (a question) does not. Ends the current
+# explanation like a comprehension-stop.
+_REFUSE_RE = re.compile(
+    r"не\s+продолжай|не\s+рассказывай|не\s+объясняй"
+    r"|(?:дальше|больше)\s+не\s+(?:надо|нужно)"
+    r"|(?:можешь|можете|можно)\s+не\s+продолжа",
+    re.IGNORECASE)
 
 # Mini-lecture request — a request verb + a depth word + an explicit topic
 # ("про/о/об X"). A depth word with no topic ("расскажи подробнее") is a
@@ -121,17 +148,30 @@ _CAP_PHRASE = ("Давай закончим начатое, а про твой �
 # and the proactive return offer is silenced. Flip to False to restore.
 _NESTING_AND_RETURNS_DISABLED = True
 
+# --- TEMPORARY -------------------------------------------------------------
+# Student-profile learning (name / background captured from the intro) is
+# disabled. The extractor is a brittle regex that misfires on STT output —
+# it latches onto random words ("я понял" -> name "Понял") and the bad name
+# then leaks into every system prompt. Profiles are built for long-term,
+# multi-session use, which the current short-session stability does not yet
+# support; answer-style adaptation already runs through the main LLM anyway.
+# When True: no name/background is extracted, injected, or saved. Flip to
+# False once sessions are stable enough for a profile to be worth keeping.
+_PROFILE_DISABLED = True
+
 
 class AgentThread(threading.Thread):
     """QA agent with a depth-capped, interrupt-aware answer stack."""
 
     def __init__(self, input_q: queue.Queue, tts_q: queue.Queue,
-                 interrupt: threading.Event, rag_model: RagModel | None):
+                 interrupt: threading.Event, rag_model: RagModel | None,
+                 documents: DocumentStore | None = None):
         super().__init__(name="agent", daemon=True)
         self._input_q = input_q
         self._tts_q = tts_q
         self._interrupt = interrupt
         self._rag = rag_model
+        self._documents = documents
         self._running = True
         self._personality = DEFAULT_PERSONALITY
         self._manner = "simpler"          # tracked style; switched by voice command
@@ -149,6 +189,11 @@ class AgentThread(threading.Thread):
         self._pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="preflight"
         )
+        # Optional board sidecar — writes user/professor/board events to
+        # data/board_events.jsonl for the standalone board UI to tail.
+        # All BoardLog methods are no-throw, so the agent loop is unaffected
+        # if the file or directory cannot be written.
+        self._board = BoardLog()
 
     # ------------------------------------------------------------------
     # Thread body
@@ -174,7 +219,18 @@ class AgentThread(threading.Thread):
                 except Exception as exc:
                     log("agent", f"resume failed: {type(exc).__name__}: {exc}")
                 continue
-            log("agent", f"handling: {utterance!r} (interruption={was_interruption})")
+            # Board UI synthesises "explain"/"read_formula" wrapping prompts
+            # and tags them with __INTENT__ so we strip the marker and skip
+            # the user_said board event (an intent chip has already been
+            # shown by the board JS). The LLM history still sees the full
+            # wrapped text — that's the point.
+            synthetic = utterance.startswith("__INTENT__")
+            if synthetic:
+                utterance = utterance[len("__INTENT__"):]
+            log("agent", f"handling: {utterance!r} (interruption={was_interruption}"
+                         f"{', synthetic' if synthetic else ''})")
+            if not synthetic:
+                self._board.user_said(utterance)
             try:
                 self._handle(utterance, was_interruption)
             except Exception as exc:
@@ -213,6 +269,15 @@ class AgentThread(threading.Thread):
             log("agent", "stop command — staying silent")
             return
 
+        # Refusal to continue ("не продолжай", "дальше не надо") — end the
+        # current explanation, like a comprehension-stop. Checked before
+        # _is_continue: "не продолжай" / "дальше не надо" contain continue
+        # keywords ("продолж" / "дальше") and would otherwise resume.
+        if len(utterance) < 45 and _REFUSE_RE.search(utterance):
+            log("agent", f"refuse-to-continue — ending: {utterance!r}")
+            self._stack.clear()
+            return
+
         # Continue — finish voicing the current answer, no LLM.
         if self._stack.depth > 0 and self._is_continue(utterance):
             self._handle_continue()
@@ -229,8 +294,13 @@ class AgentThread(threading.Thread):
 
         # Bare acknowledgement ("да", "давайте", "понятно") — not a question.
         # It must not clear the stack: continue the current answer if one is
-        # live, otherwise ignore it.
+        # live, otherwise ignore it. An acknowledgement that signals the
+        # student UNDERSTOOD ("понял, спасибо") ends the explanation instead.
         if self._is_acknowledgement(utterance):
+            if self._is_comprehension_stop(utterance):
+                log("agent", f"comprehension-stop — ending: {utterance!r}")
+                self._stack.clear()
+                return
             if self._stack.depth > 0:
                 log("agent", f"acknowledgement — continuing: {utterance!r}")
                 self._handle_continue()
@@ -285,6 +355,15 @@ class AgentThread(threading.Thread):
         return bool(_ACK_RE.fullmatch(u))
 
     @staticmethod
+    def _is_comprehension_stop(utterance: str) -> bool:
+        """An acknowledgement that signals the student understood — the
+        explanation should END, not resume. The caller has already confirmed
+        the whole utterance is bare acknowledgement filler, so this only
+        splits 'understood, stop' from 'understood, go on'."""
+        u = utterance.strip()
+        return bool(_COMPREHENSION_RE.search(u)) and not _GO_ON_RE.search(u)
+
+    @staticmethod
     def _is_yes(utterance: str) -> bool:
         u = utterance.strip()
         return len(u) < 40 and bool(_YES_RE.search(u))
@@ -310,8 +389,10 @@ class AgentThread(threading.Thread):
     def _answer_question(self, utterance: str, nested: bool,
                          long: bool = False) -> None:
         # Learn the student's name / background from an introduction — regex
-        # only, cheap. Runs while the profile is still incomplete.
-        if not (self._profile.name and self._profile.background):
+        # only, cheap. Disabled (see _PROFILE_DISABLED): the regex misfires
+        # on STT output and writes garbage names.
+        if not _PROFILE_DISABLED and not (self._profile.name
+                                          and self._profile.background):
             info = meta_agent.extract_student_info(utterance)
             if info and self._profile.note_intro(
                 info.get("name", ""), info.get("background", "")
@@ -350,11 +431,16 @@ class AgentThread(threading.Thread):
         system_prompt = PROFESSOR_GOAL + "\n\n" + construct_prompt(
             rag_context=rag_context,
             personality_key=self._personality,
-            student_profile=self._profile.as_prompt_section(),
+            student_profile=("" if _PROFILE_DISABLED
+                             else self._profile.as_prompt_section()),
             meta_instruction=meta_instruction,
             rag_score=rag_score,
             past_sessions=self._memory.as_prompt_section(),
         )
+        if self._documents is not None:
+            doc_section = self._documents.as_prompt_section()
+            if doc_section:
+                system_prompt = system_prompt + "\n\n" + doc_section
         messages = create_chat_from_prompt(system_prompt, role="system")
         messages += self._history_messages()
         messages.append({"role": "user", "content": utterance})
@@ -391,9 +477,15 @@ class AgentThread(threading.Thread):
 
     def _generate(self, answer: Answer, messages: list,
                   max_tokens: int) -> None:
+        # The board sidecar gets [BOARD-*] blocks directly from the single
+        # main LLM call — stream_response_sentences splits the stream at
+        # the ---BOARD--- marker so TTS only sees the pre-marker text and
+        # the post-marker tags land in this list via the callback.
+        board_blob: list[str] = []
         try:
             for sentence in stream_response_sentences(
-                messages, max_tokens=max_tokens
+                messages, max_tokens=max_tokens,
+                board_capture=board_blob.append,
             ):
                 answer.add_sentence(sentence)
         except Exception as exc:
@@ -402,6 +494,26 @@ class AgentThread(threading.Thread):
             answer.finish_generation()
         log("agent", f"generated {len(answer.sentences)} sentence(s) "
                      f"for {answer.question[:40]!r}")
+        # Mirror the final answer to the board log. Bridges and short cues
+        # (Answer with empty question) are routed through _speak_line, not
+        # _generate, so they never reach this path — only real LLM answers do.
+        full_text = " ".join(answer.sentences).strip()
+        if not full_text:
+            return
+        seq = self._board.professor_said(full_text)
+        # Parse [BOARD-*] tags from the captured post-marker text. Failures
+        # here must never disturb the agent — the board is optional.
+        if board_blob:
+            try:
+                items = parse_board_block("".join(board_blob))
+                for kind, body in items:
+                    self._board.board_item(kind, body, ref_seq=seq)
+                if items:
+                    log("agent", f"board: {len(items)} item(s) extracted")
+            except Exception as exc:
+                log("agent", f"board parse failed: "
+                             f"{type(exc).__name__}: {exc}")
+                self._board.warning(f"parse failed: {exc}")
 
     # ------------------------------------------------------------------
     # Resume + proactive offers
@@ -528,11 +640,12 @@ class AgentThread(threading.Thread):
         except Exception as exc:
             log("agent", f"persist_memory failed: "
                          f"{type(exc).__name__}: {exc}")
-        try:
-            self._profile.save()
-        except Exception as exc:
-            log("agent", f"profile save failed: "
-                         f"{type(exc).__name__}: {exc}")
+        if not _PROFILE_DISABLED:
+            try:
+                self._profile.save()
+            except Exception as exc:
+                log("agent", f"profile save failed: "
+                             f"{type(exc).__name__}: {exc}")
 
     def _rag_lookup(self, query: str) -> tuple[str, float]:
         if self._rag is None:
@@ -548,3 +661,4 @@ class AgentThread(threading.Thread):
     def stop(self) -> None:
         self._running = False
         self._pool.shutdown(wait=False)
+        self._board.close()

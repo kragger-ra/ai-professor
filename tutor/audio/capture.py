@@ -16,7 +16,7 @@ import queue
 import re
 import threading
 import time
-from typing import Optional, Set
+from typing import Callable, Optional, Set
 
 import numpy as np
 import sounddevice as sd
@@ -174,6 +174,19 @@ class CaptureThread(threading.Thread):
         # Set once the mic stream is open — app.py waits on this to play
         # the audible "ready" cue.
         self.ready = threading.Event()
+        # STT mode, switched at runtime by board commands (stt_mode):
+        #   "open"      — every utterance becomes an LLM question (default)
+        #   "transcribe"— utterances are routed to the board's chat input field
+        #                 (callable transcript_sink), NOT to the LLM
+        # `paused` is independent of mode — when set, the loop reads the mic
+        # to keep the stream alive but discards all audio. The board UI sets
+        # this in "transcribe" mode to give the student a record/stop toggle.
+        self.stt_mode = "open"
+        self.paused = threading.Event()
+        # Set by app.py to route transcripts when mode == "transcribe".
+        self.transcript_sink: Optional[Callable[[str], None]] = None
+        # Set by app.py once the capture loop has loaded Whisper.
+        self.recognizer: Optional[FasterWhisperSTT] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -200,6 +213,9 @@ class CaptureThread(threading.Thread):
         stt_device = os.getenv("STT_COMPUTE_DEVICE", "cuda")
         log("capture", f"loading Whisper on {stt_device}...")
         recognizer = FasterWhisperSTT(device=stt_device)
+        # Expose the Whisper instance so app.py's voice_message handler can
+        # transcribe PTT clips without loading a second model on the GPU.
+        self.recognizer = recognizer
         log("capture", "Whisper ready — listening")
 
         speech_buffer: list = []
@@ -224,6 +240,17 @@ class CaptureThread(threading.Thread):
                 self.ready.set()   # mic stream open — pipeline is listening
                 while self._running:
                     data, _overflowed = stream.read(BLOCK_SIZE)
+                    if self.paused.is_set():
+                        # PTT mode: capture is suspended. Drain any partial
+                        # speech state so a resume doesn't carry over stale
+                        # audio, then wait for the unpause.
+                        if is_speaking:
+                            speech_buffer.clear()
+                            is_speaking = False
+                            was_interruption = False
+                        if stt_accumulator:
+                            stt_accumulator = []
+                        continue
                     audio_chunk = data[:, 0]  # mono
                     rms = float(np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2)))
 
@@ -237,7 +264,7 @@ class CaptureThread(threading.Thread):
                             full_text = " ".join(stt_accumulator)
                             stt_accumulator = []
                             log("capture", f"flush accumulator: '{full_text}'")
-                            self._input_q.put((full_text, was_interruption))
+                            self._dispatch_transcript(full_text, was_interruption)
                             is_speaking = False
 
                     # Anti-echo: raise the gate while TTS is actively playing
@@ -294,7 +321,7 @@ class CaptureThread(threading.Thread):
                                     full_text = " ".join(stt_accumulator)
                                     stt_accumulator = []
                                     log("capture", f"utterance: '{full_text}'")
-                                    self._input_q.put((full_text, was_interruption))
+                                    self._dispatch_transcript(full_text, was_interruption)
                                 else:
                                     # No usable transcript (cough / noise /
                                     # backchannel). The speech onset already
@@ -321,6 +348,22 @@ class CaptureThread(threading.Thread):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _dispatch_transcript(self, text: str, was_interruption: bool) -> None:
+        """Route a finished transcript according to the current STT mode.
+
+        ``open``       → straight into the agent's input queue (default).
+        ``transcribe`` → call ``transcript_sink`` so the board UI can drop it
+                         into the chat input field; do NOT call the LLM.
+        """
+        if self.stt_mode == "transcribe" and self.transcript_sink:
+            try:
+                self.transcript_sink(text)
+            except Exception as exc:
+                log("capture", f"transcript_sink failed: "
+                               f"{type(exc).__name__}: {exc}")
+            return
+        self._input_q.put((text, was_interruption))
 
     def _transcribe(
         self,

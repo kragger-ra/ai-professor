@@ -48,9 +48,14 @@ def _sanitize_for_vosk(text: str) -> str:
     """
     if not text:
         return text
-    # 1. Strip Unicode combining marks (acute, grave, etc.)
+    # 1. Strip ONLY the combining marks that wreck Vosk synthesis
+    #    (acute U+0301, grave U+0300, circumflex U+0302 — used as bogus
+    #    stress markers). DO NOT touch other combining marks: ё decomposes
+    #    to "е + COMBINING DIAERESIS (U+0308)" under NFD, and stripping
+    #    *all* combining marks would silently demote ё to е, which Vosk
+    #    then voices as a plain "е".
     text = unicodedata.normalize('NFD', text)
-    text = ''.join(c for c in text if not unicodedata.combining(c))
+    text = text.replace('́', '').replace('̀', '').replace('̂', '')
     text = unicodedata.normalize('NFC', text)
     # 2. Drop any stray backticks (paired ones are already stripped upstream
     #    by core_agent._strip_markdown_for_tts; this catches the lone ones).

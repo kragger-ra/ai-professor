@@ -12,7 +12,7 @@ import queue
 import re
 import threading
 import time
-from typing import Generator, List, Optional
+from typing import Callable, Generator, List, Optional
 
 import litellm
 
@@ -311,6 +311,14 @@ _BARE_EMOTION_TAIL_RE = re.compile(
 _EMOTION_WORD_RE = re.compile(r"\b(" + _EMOTIONS + r")\b", re.IGNORECASE)
 
 
+# Board-marker safety net. The primary mechanism is stop=["---BOARD---"] in
+# the streaming call (the backend never emits the marker or anything after
+# it), but if the model puts a bracket tag inline before reaching the marker
+# we still must NOT voice "[BOARD-FORMULA]..." literally through TTS.
+_BOARD_TAG_RE = re.compile(r"\[/?BOARD-[A-Z]+\]", re.IGNORECASE)
+_BOARD_SEPARATOR_RE = re.compile(r"-{3,}\s*BOARD\s*-{3,}", re.IGNORECASE)
+
+
 # Emojis / pictographs — Vosk would try to vocalize them. Strip outright.
 _EMOJI_RE = re.compile(
     "["
@@ -326,17 +334,23 @@ _EMOJI_RE = re.compile(
 
 
 def _scrub(sentence: str) -> str:
-    """Remove inline orchestration markers (emotion tags, emojis)."""
+    """Remove inline orchestration markers (emotion tags, emojis, board tags)."""
     cleaned = _EMOTION_TAG_RE.sub(" ", sentence)
     cleaned = _BARE_EMOTION_TAIL_RE.sub("", cleaned)
     cleaned = _EMOTION_WORD_RE.sub("", cleaned)
     cleaned = _EMOJI_RE.sub("", cleaned)
+    cleaned = _BOARD_SEPARATOR_RE.sub("", cleaned)
+    cleaned = _BOARD_TAG_RE.sub("", cleaned)
     return cleaned.strip()
+
+
+BOARD_MARKER = "---BOARD---"
 
 
 def stream_response_sentences(messages: list, temperature: float = 0.6,
                               max_tokens: int = 500,
                               stop: Optional[List[str]] = None,
+                              board_capture: Optional[Callable[[str], None]] = None,
                               ) -> Generator[str, None, str]:
     """Stream LLM response and yield complete sentences.
 
@@ -344,59 +358,100 @@ def stream_response_sentences(messages: list, temperature: float = 0.6,
     Returns full response text when generator exhausts.
 
     ``stop`` is forwarded to the LLM backend (e.g. ["[END]"]) to halt generation
-    cleanly when the model writes a completion marker.
+    cleanly when the model writes a completion marker. NB: OpenAI GPT-5.x does
+    not accept this parameter — pass ``None`` for that backend.
 
-    Usage::
-
-        gen = stream_response_sentences(messages)
-        full = ""
-        for sentence in gen:
-            tts_queue.append({"text": sentence, "emotion": "neutral"})
-            full += sentence + " "
+    ``board_capture`` — when set, the stream is split at the BOARD_MARKER
+    (``---BOARD---``). Pre-marker text feeds the sentence buffer as usual;
+    post-marker text is collected and passed to the callback at stream end.
+    This is how the board sidecar gets [BOARD-*] tags without a second LLM
+    call and without TTS ever seeing the marker or tags.
     """
     buffer = SentenceBuffer()
     full_response = ""
+    board_text = ""
+    pre_board = True
+    fed_chars = 0   # how many chars of full_response we have already fed to `buffer`
     _last_yield_time = time.time()
 
     # When using local LLM with trigger word, sentences containing
     # "TRIGGER_START" are artifacts of the thinking filter and should be skipped.
     _trigger = "TRIGGER_START" if USE_LOCAL_LLM else None
 
+    def _emit(sentence: str) -> Optional[str]:
+        if _trigger and _trigger in sentence:
+            sentence = sentence.split(_trigger, 1)[-1].strip()
+            if not sentence:
+                return None
+        sentence = _scrub(sentence)
+        return sentence or None
+
     for token in stream_fast(messages, temperature, max_tokens, stop=stop):
         full_response += token
-        sentences = buffer.add(token)
-        for sentence in sentences:
-            if _trigger and _trigger in sentence:
-                sentence = sentence.split(_trigger, 1)[-1].strip()
-                if not sentence:
-                    continue
-            sentence = _scrub(sentence)
-            if not sentence:
-                continue
-            _last_yield_time = time.time()
-            yield sentence
+
+        if not pre_board:
+            board_text += token
+            continue
+
+        idx = full_response.find(BOARD_MARKER)
+        if idx < 0:
+            # Whole token is pre-marker, but the marker may be split across
+            # tokens — hold back the last (len(BOARD_MARKER) - 1) characters
+            # from the buffer so we don't leak a partial marker into TTS.
+            safe_upto = max(fed_chars, len(full_response) - (len(BOARD_MARKER) - 1))
+            if safe_upto > fed_chars:
+                chunk = full_response[fed_chars:safe_upto]
+                fed_chars = safe_upto
+                for sentence in buffer.add(chunk):
+                    out = _emit(sentence)
+                    if out:
+                        _last_yield_time = time.time()
+                        yield out
+        else:
+            # Marker fully present in full_response. Feed the unfed pre-marker
+            # tail to the buffer, then switch to board-capture mode.
+            if idx > fed_chars:
+                chunk = full_response[fed_chars:idx]
+                for sentence in buffer.add(chunk):
+                    out = _emit(sentence)
+                    if out:
+                        _last_yield_time = time.time()
+                        yield out
+            fed_chars = idx
+            pre_board = False
+            board_text = full_response[idx + len(BOARD_MARKER):]
 
         # Force flush if buffer hasn't yielded a sentence in FORCE_FLUSH_IDLE_S
         # (some cloud models generate long text without punctuation)
         if time.time() - _last_yield_time > FORCE_FLUSH_IDLE_S and buffer.buffer.strip():
             forced = buffer.flush()
             if forced:
-                if _trigger and _trigger in forced:
-                    forced = forced.split(_trigger, 1)[-1].strip()
-                forced = _scrub(forced)
-                if forced:
+                out = _emit(forced)
+                if out:
                     log(_COMPONENT,
-                        f"force-flushing buffer after 8s: '{forced[:50]}'")
+                        f"force-flushing buffer after 8s: '{out[:50]}'")
                     _last_yield_time = time.time()
-                    yield forced
+                    yield out
 
-    # Flush remaining
+    # If the marker never arrived, flush the chars we were holding back.
+    if pre_board and fed_chars < len(full_response):
+        tail = full_response[fed_chars:]
+        for sentence in buffer.add(tail):
+            out = _emit(sentence)
+            if out:
+                yield out
+
+    # Flush remaining buffered text
     remaining = buffer.flush()
     if remaining:
-        if _trigger and _trigger in remaining:
-            remaining = remaining.split(_trigger, 1)[-1].strip()
-        remaining = _scrub(remaining)
-        if remaining:
-            yield remaining
+        out = _emit(remaining)
+        if out:
+            yield out
+
+    if board_capture and board_text.strip():
+        try:
+            board_capture(board_text)
+        except Exception as exc:
+            log(_COMPONENT, f"board_capture failed: {type(exc).__name__}: {exc}")
 
     return full_response

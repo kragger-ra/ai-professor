@@ -39,6 +39,16 @@ echo       WARNING: LM Studio (:22227) not responding - RAG will be
 echo                unavailable. Start LM Studio with the bge-m3 model.
 
 :launch
+echo [2.5/3] Starting board UI sidecar (optional, requires PySide6)...
+.venv\Scripts\python.exe -c "import PySide6" 2>nul
+if errorlevel 1 (
+    echo       PySide6 not installed - skipping board. To enable:
+    echo           pip install "PySide6~=6.7"
+) else (
+    start "AI Professor Board" /MIN .venv\Scripts\python.exe -m board
+    echo       board launched - window appears once tutor writes first event
+)
+
 echo [3/3] Starting AI Professor Tutor v2 - live log below.
 echo       Listen for the readiness signal. Press Ctrl+C here to stop.
 echo       A copy of this log is also saved to tutor_v2.log

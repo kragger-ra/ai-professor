@@ -252,6 +252,21 @@ def _do_load_subject(agent: "AgentThread", name: str, path: str, verb: str) -> N
     except Exception as exc:
         log(_COMPONENT, f"STT vocab refresh failed (non-fatal): {exc}")
 
+    # Persist the package path + announce to the board sidecar so its
+    # quick-switcher / manager light up after a voice load too.
+    try:
+        from tutor.brain import course as _course
+        _course.set_current_path(path)
+        cfg = _course.get_current()
+        board = getattr(agent, "_board", None)
+        if board is not None:
+            board.course_loaded(
+                str(cfg.fields.get("name") or name),
+                str(cfg.fields.get("short_name") or name),
+                path, n)
+    except Exception as exc:
+        log(_COMPONENT, f"course_loaded emit failed (non-fatal): {exc}")
+
     agent._speak_line(
         f"Готово, загружено {n} фрагментов. Могу преподавать предмет {name}."
     )

@@ -11,8 +11,8 @@ rem  be passed reliably through cmd -> PowerShell argv).
 rem  taskkill /T walks the parent->child tree.
 rem ============================================================
 
-echo Stopping the tutor app and the Vosk TTS server...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*vosk_tts_server\server.py*' -or $_.CommandLine -like '*tutor.app*') } | ForEach-Object { Write-Host ('  killing tree at PID ' + $_.ProcessId); & taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }"
+echo Stopping the tutor app, the Vosk TTS server, and the board sidecar...
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -and ($_.CommandLine -like '*vosk_tts_server\server.py*' -or $_.CommandLine -like '*tutor.app*' -or $_.CommandLine -like '*-m board*') } | ForEach-Object { Write-Host ('  killing tree at PID ' + $_.ProcessId); & taskkill /F /T /PID $_.ProcessId 2>&1 | Out-Null }"
 
 echo.
 echo All stopped.
