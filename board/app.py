@@ -57,7 +57,7 @@ def main() -> int:
         return 0
 
     from PySide6.QtGui import QFont
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QMessageBox
     from board.ui import MainWindow
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -68,6 +68,18 @@ def main() -> int:
     app.setFont(base_font)
     win = MainWindow(jsonl_path, from_start=args.replay)
     win.show()
+
+    # Alpha disclaimer — fires once per board launch, on top of the now-
+    # visible main window. Cosmetic / informational only; OK closes it.
+    QMessageBox.information(
+        win,
+        "AI Professor — альфа-тестирование",
+        "Этот интерфейс сейчас находится в стадии альфа-тестирования.\n\n"
+        "Большая часть функций уже работает, но возможны нестабильности, "
+        "странное поведение и неполные сценарии. Если что-то выглядит "
+        "сломанным — это нормально для текущего этапа.\n\n"
+        "Сообщайте о найденных проблемах в обратной связи."
+    )
     return app.exec()
 
 
