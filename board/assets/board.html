@@ -35,21 +35,26 @@
   .formula { margin:22px -10px; text-align:left; overflow-x:auto; }
   /* Mermaid diagrams — chalkboard look. The rendered SVG sits centred
      on the board; mermaid does its own dark-theme colouring via the
-     init() call below. */
+     init() call below. No CSS-based source hiding — font-size:0 trips
+     Qt WebEngine ('QFont::setPointSize: Point size <= 0') and
+     color:transparent bleeds into the SVG via currentColor. The raw
+     'flowchart TD ...' source flashes for ~50-200ms before mermaid.run
+     replaces it; that's the cleanest path. */
   .mermaid {
     margin:22px -10px;
     background:transparent;
     text-align:center;
     overflow-x:auto;
-    color:#ebebeb;
+    color:#9aa;
+    font-family:ui-monospace, Consolas, monospace;
+    font-size:11px;
+    white-space:pre;
   }
-  /* Pre-render: hide the raw source text without making the div invisible
-     to children. visibility:hidden cascades into the SVG mermaid will
-     inject; use font-size:0 instead, which collapses the source text but
-     doesn't affect the SVG's intrinsic dimensions. */
-  .mermaid:not([data-processed="true"]) {
-    font-size:0;
-    line-height:0;
+  .mermaid[data-processed="true"] {
+    color:#ebebeb;
+    font-family:inherit;
+    font-size:inherit;
+    white-space:normal;
   }
   .mermaid svg { max-width:100%; height:auto; }
   .mermaid .mermaid-error {
