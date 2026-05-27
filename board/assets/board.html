@@ -345,13 +345,20 @@
     _stickyBottom = dist < 40;
   }, { passive: true });
   function appendItem(html) {
-    if (html.indexOf('class="mermaid"') >= 0) {
-      console.log('[board] appendItem: incoming mermaid HTML, length=' + html.length);
-    }
+    console.log('[board] appendItem len=' + html.length +
+                ' preview=' + JSON.stringify(html.slice(0, 100)));
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
     const board = document.getElementById('board');
-    while (wrap.firstChild) board.appendChild(wrap.firstChild);
+    let added = 0;
+    while (wrap.firstChild) {
+      board.appendChild(wrap.firstChild);
+      added++;
+    }
+    console.log('[board] appendItem added ' + added + ' child(ren), ' +
+                'board now has ' + board.children.length + ' items, ' +
+                'mermaid divs in board: ' +
+                board.querySelectorAll('.mermaid').length);
     _renderMath(board);
     _renderMermaid(board);
     if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
