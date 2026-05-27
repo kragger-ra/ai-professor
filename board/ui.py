@@ -933,29 +933,91 @@ class MainWindow(QMainWindow):
         self.act_detach.blockSignals(False)
 
     def _save_session_as(self) -> None:
-        """Copy the current rolling JSONL to a user-chosen path.
+        """Save ONLY the current session — not the whole rolling file.
 
-        That single file is the canonical board+chat archive: re-opening
-        it through Файл → Открыть сессию replays both panes faithfully.
+        The rolling ``data/board_events.jsonl`` accumulates events across
+        every session since the last truncation/reset, which is wrong for
+        a 'save this session as…' action. We resolve the current
+        session_id by reading the rolling file's last ``session_start``
+        record, then either copy the matching per-session snapshot from
+        ``data/sessions/`` (preferred) or filter the rolling file by
+        session_id as a fallback.
         """
         if not self._jsonl_path.exists():
-            self.statusBar().showMessage("Сессия ещё пуста — нечего сохранять", 4000)
+            self.statusBar().showMessage(
+                "Сессия ещё пуста — нечего сохранять", 4000)
             return
-        default = f"session-{Path(self._jsonl_path).stem}.jsonl"
+        last_session = self._latest_session_id(self._jsonl_path)
+        if not last_session:
+            self.statusBar().showMessage(
+                "Не нашёл маркер начала сессии — нечего сохранять", 4000)
+            return
+        default = f"session-{last_session}.jsonl"
         path_str, _ = QFileDialog.getSaveFileName(
             self, "Сохранить сессию (доска + чат)",
             default, "Session archive (*.jsonl)"
         )
         if not path_str:
             return
+        out_path = Path(path_str)
+        snapshot = _DATA / "sessions" / f"board_{last_session}.jsonl"
         try:
-            import shutil
-            shutil.copy2(self._jsonl_path, path_str)
+            if snapshot.exists():
+                import shutil
+                shutil.copy2(snapshot, out_path)
+                src_label = "снапшот"
+            else:
+                n = self._filter_session_into(
+                    self._jsonl_path, last_session, out_path)
+                src_label = f"фильтр {n} событий"
             self.statusBar().showMessage(
-                f"Сессия сохранена: {path_str}", 5000)
+                f"Сессия {last_session} сохранена ({src_label}): "
+                f"{out_path}", 5000)
         except Exception as exc:
             QMessageBox.warning(self, "Сохранение",
                                 f"Не удалось сохранить: {exc}")
+
+    @staticmethod
+    def _latest_session_id(jsonl_path: Path) -> str:
+        """Walk the rolling file and return the last session_id seen on a
+        session_start event. Empty string if none found."""
+        last = ""
+        try:
+            with open(jsonl_path, "rb") as f:
+                for raw in f:
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw.decode("utf-8"))
+                    except Exception:
+                        continue
+                    if rec.get("type") == "session_start":
+                        sid = (rec.get("session") or "").strip()
+                        if sid:
+                            last = sid
+        except Exception:
+            pass
+        return last
+
+    @staticmethod
+    def _filter_session_into(src: Path, session_id: str, dst: Path) -> int:
+        """Copy only events whose ``session`` field equals session_id.
+        Returns the number of events written."""
+        n = 0
+        with open(src, "rb") as fi, open(dst, "wb") as fo:
+            for raw in fi:
+                stripped = raw.strip()
+                if not stripped:
+                    continue
+                try:
+                    rec = json.loads(stripped.decode("utf-8"))
+                except Exception:
+                    continue
+                if (rec.get("session") or "").strip() == session_id:
+                    fo.write(raw if raw.endswith(b"\n") else raw + b"\n")
+                    n += 1
+        return n
 
     # ------------------------------------------------------------------
     # Document uploads
