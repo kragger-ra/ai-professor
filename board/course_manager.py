@@ -113,7 +113,7 @@ class CourseManagerDock(QDockWidget):
             "border-bottom:1px solid #2a3a2a; padding:4px 6px; spacing:4px; }"
             "QToolButton { color:#cfcfcf; background:transparent; "
             "border:1px solid transparent; padding:4px 10px; "
-            "border-radius:4px; font-size:12px; }"
+            "border-radius:4px; font-size:14px; }"
             "QToolButton:hover { background:#2a3a2a; color:#fff; }"
         )
         a_new = QAction("Подготовить новый…", self)
@@ -170,7 +170,7 @@ class CourseManagerDock(QDockWidget):
         self._preview.setOpenExternalLinks(False)
         self._preview.setStyleSheet(
             "QTextBrowser { background:#0d1110; color:#cfcfcf; "
-            "border:0; padding:8px 10px; font-size:12px; }"
+            "border:0; padding:8px 10px; font-size:14px; }"
         )
         self._preview.setHtml(self._empty_preview_html())
         splitter.addWidget(self._preview)
@@ -385,10 +385,10 @@ class CourseManagerDock(QDockWidget):
             parts.append(
                 f'<hr style="border:0;border-top:1px solid #2a3a2a;'
                 f'margin:10px 0;">'
-                f'<p style="color:#888;font-size:11px;">Начало корпуса '
+                f'<p style="color:#888;font-size:13px;">Начало корпуса '
                 f'({html_mod.escape(sample_name)}):</p>'
                 f'<pre style="white-space:pre-wrap;color:#cfcfcf;'
-                f'font-size:11px;">{html_mod.escape(sample)}</pre>'
+                f'font-size:13px;">{html_mod.escape(sample)}</pre>'
             )
         return "".join(parts)
 

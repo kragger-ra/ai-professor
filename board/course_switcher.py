@@ -18,7 +18,7 @@ from board.courses_scan import scan_courses
 _BTN_STYLE = (
     "QToolButton { color:#dbe7db; background:#1c2620; "
     "border:1px solid #3a5a3a; border-radius:11px; "
-    "padding:3px 12px; font-size:12px; min-height:18px; }"
+    "padding:3px 12px; font-size:14px; min-height:18px; }"
     "QToolButton:hover { background:#26362a; border-color:#5a7a5a; }"
     "QToolButton::menu-indicator { width:10px; }"
 )
@@ -39,7 +39,7 @@ class CourseQuickSwitcher(QWidget):
         row.setSpacing(6)
 
         self._label = QLabel("Курс:")
-        self._label.setStyleSheet("color:#9ab59a; font-size:12px;")
+        self._label.setStyleSheet("color:#9ab59a; font-size:14px;")
         row.addWidget(self._label)
 
         self._button = QToolButton(self)

@@ -385,7 +385,7 @@ class CourseBuilderDialog(QDialog):
             "Можно перетащить файлы или целые папки прямо в список. "
             "Поддерживаются .pdf / .docx / .md / .txt."
         )
-        hint.setStyleSheet("color:#888; font-size:11px;")
+        hint.setStyleSheet("color:#888; font-size:13px;")
         files_layout.addWidget(hint)
         root.addWidget(files_box, stretch=2)
 
@@ -439,7 +439,7 @@ class CourseBuilderDialog(QDialog):
         self._log.setStyleSheet(
             "QPlainTextEdit { background:#0d1110; color:#cfcfcf; "
             "border:1px solid #2a3a2a; font-family:Consolas, monospace; "
-            "font-size:11px; }"
+            "font-size:13px; }"
         )
         build_layout.addWidget(self._log)
         root.addWidget(build_box)

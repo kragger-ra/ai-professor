@@ -108,7 +108,7 @@ class ChatPane(QWidget):
             btn.setStyleSheet(
                 "QPushButton { background:#1f2422; color:#bbb; "
                 "border:1px solid #2c3530; border-radius:6px; "
-                "padding:7px 14px; font-size:14px; }"
+                "padding:7px 14px; font-size:15px; }"
                 "QPushButton:hover { background:#2a3530; color:#fff; }"
                 "QPushButton:checked { background:#3a5a3a; color:#fff; "
                 "border-color:#5a7a5a; }"
@@ -332,7 +332,7 @@ class MainWindow(QMainWindow):
         )
         self.chat_dock.setWidget(self.chat_pane)
         self.chat_dock.setStyleSheet(
-            "QDockWidget { color:#e0e0e0; font-size:13px; }"
+            "QDockWidget { color:#e0e0e0; font-size:14px; }"
             "QDockWidget::title { background:#1c2120; padding:7px 14px; "
             "border:1px solid #3a4a3a; border-bottom:2px solid #3a4a3a; "
             "text-align:left; font-weight:600; letter-spacing:.5px; }"
@@ -369,7 +369,7 @@ class MainWindow(QMainWindow):
         )
         self.artifacts_dock.setWidget(self.artifacts_list)
         self.artifacts_dock.setStyleSheet(
-            "QDockWidget { color:#e0e0e0; font-size:13px; }"
+            "QDockWidget { color:#e0e0e0; font-size:14px; }"
             "QDockWidget::title { background:#1c2120; padding:7px 14px; "
             "border:1px solid #3a4a3a; border-bottom:2px solid #3a4a3a; "
             "text-align:left; font-weight:600; letter-spacing:.5px; }"
@@ -437,11 +437,11 @@ class MainWindow(QMainWindow):
         mb = self.menuBar()
         mb.setStyleSheet(
             "QMenuBar { background:#22272a; color:#e0e0e0; padding:4px 6px; "
-            "border-bottom:1px solid #3a4a3a; font-size:14px; }"
+            "border-bottom:1px solid #3a4a3a; font-size:15px; }"
             "QMenuBar::item { padding:6px 14px; border-radius:4px; }"
             "QMenuBar::item:selected { background:#3a4a3a; color:#fff; }"
             "QMenu { background:#1c2120; color:#e0e0e0; "
-            "border:1px solid #3a4a3a; padding:4px; font-size:14px; }"
+            "border:1px solid #3a4a3a; padding:4px; font-size:15px; }"
             "QMenu::item { padding:7px 20px; border-radius:3px; }"
             "QMenu::item:selected { background:#3a4a3a; color:#fff; }"
             "QMenu::separator { height:1px; background:#2a3a2a; margin:4px 6px; }"
@@ -605,7 +605,7 @@ class MainWindow(QMainWindow):
             "border-bottom:1px solid #2a3a2a; padding:5px 10px; spacing:8px; }"
             "QToolButton { color:#cfcfcf; background:transparent; "
             "border:1px solid transparent; padding:6px 14px; "
-            "border-radius:4px; font-size:13px; }"
+            "border-radius:4px; font-size:14px; }"
             "QToolButton:hover { background:#2a3a2a; color:#fff; }"
             "QToolButton:checked { background:#3a5a3a; color:#fff; "
             "border-color:#4a6a4a; }"

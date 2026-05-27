@@ -56,10 +56,16 @@ def main() -> int:
             print(f"chat HTML saved: {args.export_chat_html} ({n} items)")
         return 0
 
+    from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
     from board.ui import MainWindow
 
     app = QApplication.instance() or QApplication(sys.argv)
+    # Bump the app-wide font one notch — Windows default 9pt looks tiny
+    # on the high-res displays the testers use. Affects menubar, dialog
+    # labels, table cells, and any widget that doesn't set its own font.
+    base_font = QFont("Segoe UI", 11)
+    app.setFont(base_font)
     win = MainWindow(jsonl_path, from_start=args.replay)
     win.show()
     return app.exec()
