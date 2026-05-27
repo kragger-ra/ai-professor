@@ -34,9 +34,13 @@ echo       already running
 
 :check_lms
 curl -s -o nul --max-time 1 http://localhost:22227/v1/models
-if not errorlevel 1 goto launch
-echo       WARNING: LM Studio (:22227) not responding - RAG will be
-echo                unavailable. Start LM Studio with the bge-m3 model.
+if not errorlevel 1 (
+    echo       LM Studio detected on :22227 - local LLM / local embeddings available
+    goto launch
+)
+echo       LM Studio not running on :22227 - tutor will use cloud
+echo       provider from .env ^(OpenAI / Anthropic / DeepSeek / Yandex^).
+echo       This is normal for the default setup.
 
 :launch
 echo [2.5/3] Starting board UI sidecar (optional, requires PySide6)...
