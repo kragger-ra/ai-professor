@@ -64,5 +64,14 @@ def _board_html(event: dict) -> str:
     if kind == "fact":
         return f'<p class="fact">{html_mod.escape(body)}</p>'
 
+    if kind == "mermaid":
+        # Mermaid library reads the diagram source from the element's text
+        # content. We escape so user-provided Mermaid never injects HTML
+        # (mermaid still receives the original text via textContent — no
+        # double-escaping issue because it parses `&lt;` as the source
+        # character `<`). Wrap in a chalkboard-friendly container; the
+        # board's appendItem() calls mermaid.run() to render after insert.
+        return f'<div class="mermaid">{html_mod.escape(body)}</div>'
+
     # unknown / malformed kind — surface without crashing
     return f'<p class="warn">{html_mod.escape(body)}</p>'

@@ -7,6 +7,7 @@
 <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
 <script defer src="katex/katex.min.js"></script>
 <script defer src="katex/contrib/auto-render.min.js"></script>
+<script src="mermaid/mermaid.min.js"></script>
 <style>
   html, body { height:100%; }
   body {
@@ -32,6 +33,20 @@
   }
   .term strong { color:#fff; font-weight:700; letter-spacing:.3px; }
   .formula { margin:22px -10px; text-align:left; overflow-x:auto; }
+  /* Mermaid diagrams — chalkboard look. The rendered SVG sits centred
+     on the board; mermaid does its own dark-theme colouring via the
+     init() call below. */
+  .mermaid {
+    margin:22px -10px;
+    background:transparent;
+    text-align:center;
+    overflow-x:auto;
+    /* Hide the raw source until mermaid replaces it with SVG, so the
+       student never sees "flowchart TD\n  A --> B" flash on screen. */
+    color:transparent;
+  }
+  .mermaid[data-processed="true"] { color:#ebebeb; }
+  .mermaid svg { max-width:100%; height:auto; }
   /* Native selection highlight — chalk-blue on dark, only the selected
      run of characters lights up, never the whole block. */
   ::selection { background:#2c5282; color:#fff; }
@@ -155,6 +170,50 @@
       try { renderMathInElement(node, KATEX_OPTS); } catch(e) {}
     }
   }
+
+  // ---------- Mermaid render ----------
+  // Initialise once on load. startOnLoad=false: we drive it ourselves
+  // from appendItem(), since the board appends items dynamically and
+  // mermaid's startOnLoad only handles diagrams present at first paint.
+  // securityLevel=loose lets us style nodes; theme=dark fits chalkboard.
+  if (window.mermaid) {
+    try {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        themeVariables: {
+          background: '#0d1110',
+          primaryColor: '#1a2a1a',
+          primaryTextColor: '#ebebeb',
+          primaryBorderColor: '#5a7a5a',
+          lineColor: '#8aa090',
+          secondaryColor: '#202c20',
+          tertiaryColor: '#2a3a2a',
+        },
+        flowchart: { htmlLabels: true, curve: 'basis' },
+        sequence: { actorMargin: 40, useMaxWidth: true },
+        securityLevel: 'loose',
+      });
+    } catch (e) { /* swallow — failure to init just means no diagrams */ }
+  }
+  async function _renderMermaid(root) {
+    if (!window.mermaid) return;
+    const nodes = root.querySelectorAll('.mermaid:not([data-processed])');
+    if (!nodes.length) return;
+    try {
+      await mermaid.run({ nodes });
+    } catch (e) {
+      // A malformed Mermaid block shouldn't kill the board; surface as
+      // a small warning under the offending node.
+      nodes.forEach((n) => {
+        if (!n.dataset.processed) {
+          n.dataset.processed = 'true';
+          n.style.color = '#a05858';
+          n.textContent = '(не удалось отрисовать схему)';
+        }
+      });
+    }
+  }
   // Sticky-bottom autoscroll: only follow new content when the user is
   // already near the bottom; otherwise leave their scroll position alone.
   let _stickyBottom = true;
@@ -169,6 +228,7 @@
     const board = document.getElementById('board');
     while (wrap.firstChild) board.appendChild(wrap.firstChild);
     _renderMath(board);
+    _renderMermaid(board);
     if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
   }
   function clearBoard() {
@@ -183,7 +243,10 @@
     window.scrollTo(0, 0);
     _stickyBottom = false;
   }
-  window.addEventListener('load', () => _renderMath(document.body));
+  window.addEventListener('load', () => {
+    _renderMath(document.body);
+    _renderMermaid(document.body);
+  });
 
   // ---------- Double-click on a known item: select the whole item ----------
   // The user can also drag-select a partial run of text inside an item;
