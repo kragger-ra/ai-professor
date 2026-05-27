@@ -627,27 +627,42 @@ class MainWindow(QMainWindow):
 
     def _on_board_loaded(self, ok: bool) -> None:
         self._board_ready = bool(ok)
+        print(f"[board-py] board loadFinished ok={ok} "
+              f"pending={len(self._pending)}", flush=True)
         self._flush_pending()
 
     def _on_chat_loaded(self, ok: bool) -> None:
         self._chat_ready = bool(ok)
+        print(f"[board-py] chat loadFinished ok={ok} "
+              f"pending={len(self._pending)}", flush=True)
         self._flush_pending()
 
     def _flush_pending(self) -> None:
         if not (self._board_ready and self._chat_ready):
+            print(f"[board-py] flush_pending blocked: "
+                  f"board_ready={self._board_ready} chat_ready={self._chat_ready}",
+                  flush=True)
             return
+        if self._pending:
+            print(f"[board-py] flush_pending dispatching {len(self._pending)} queued events",
+                  flush=True)
         for event in self._pending:
             self._dispatch(event)
         self._pending.clear()
 
     def _on_event(self, event: dict) -> None:
+        et = event.get("type", "?")
         # stt_transcript bypasses the webview — drop it into the chat input.
-        if event.get("type") == "stt_transcript":
+        if et == "stt_transcript":
             self.chat_pane.set_input_text(event.get("text", ""))
             return
         if not (self._board_ready and self._chat_ready):
             self._pending.append(event)
+            print(f"[board-py] queue {et} (board_ready={self._board_ready} "
+                  f"chat_ready={self._chat_ready} pending={len(self._pending)})",
+                  flush=True)
             return
+        print(f"[board-py] dispatch {et}", flush=True)
         self._dispatch(event)
 
     def _dispatch(self, event: dict) -> None:
