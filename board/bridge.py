@@ -61,6 +61,14 @@ class BoardBridge(QObject):
     def set_tts_muted(self, muted: bool) -> None:
         self._commander.tts_mute(bool(muted))
 
+    @Slot()
+    def tts_pause(self) -> None:
+        self._commander.tts_pause()
+
+    @Slot()
+    def tts_resume(self) -> None:
+        self._commander.tts_resume()
+
     @Slot(str)
     def request_comment(self, anchor: str) -> None:
         anchor = (anchor or "").strip()

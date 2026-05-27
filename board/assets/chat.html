@@ -32,17 +32,22 @@
   .msg.prof {
     background:#232323; align-self:flex-start;
     border-bottom-left-radius:4px;
-    padding-right:32px;    /* room for speaker icon */
+    padding-right:58px;    /* room for speaker + pause/play toggle */
   }
-  .msg.prof .speak {
-    position:absolute; top:6px; right:6px;
+  .msg.prof .speak,
+  .msg.prof .pause-toggle {
+    position:absolute; top:6px;
     width:22px; height:22px; border-radius:50%;
     display:flex; align-items:center; justify-content:center;
-    background:transparent; color:#9ca; cursor:pointer;
+    background:transparent; cursor:pointer;
     transition:background-color .12s, color .12s;
   }
+  .msg.prof .speak { right:6px; color:#9ca; }
   .msg.prof .speak:hover { background:#3a4a3a; color:#fff; }
-  .msg.prof .speak svg { width:14px; height:14px; }
+  .msg.prof .pause-toggle { right:30px; color:#dcdcdc; }
+  .msg.prof .pause-toggle:hover { background:#3a4a3a; color:#fff; }
+  .msg.prof .speak svg,
+  .msg.prof .pause-toggle svg { width:14px; height:14px; }
   .sep {
     color:#555; text-align:center; font-size:10px;
     margin:14px 0 8px; border-top:1px dashed #2a2a2a;
@@ -92,10 +97,53 @@
     '<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 16.5 12z' +
     'M14 3.23v2.06A6.5 6.5 0 0 1 14 18.71v2.06A8.5 8.5 0 0 0 14 3.23z"/>' +
     '</svg>';
+  const _PAUSE_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">' +
+    '<rect x="6" y="5" width="4" height="14" rx="1"/>' +
+    '<rect x="14" y="5" width="4" height="14" rx="1"/>' +
+    '</svg>';
+  const _PLAY_SVG =
+    '<svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">' +
+    '<polygon points="7,4 20,12 7,20"/>' +
+    '</svg>';
+
+  // Global TTS-pause state. Shared by every bubble's toggle so all icons
+  // stay in sync. Pause click anywhere -> every toggle flips to ▶ (resume).
+  // A speaker click on any bubble starts fresh playback, so it also clears
+  // the paused state.
+  window._ttsPaused = false;
+
+  function _refreshPauseToggles() {
+    const all = document.querySelectorAll('.msg.prof .pause-toggle');
+    all.forEach((btn) => {
+      btn.innerHTML = window._ttsPaused ? _PLAY_SVG : _PAUSE_SVG;
+      btn.title = window._ttsPaused ? 'Продолжить' : 'Пауза';
+    });
+  }
 
   function _injectSpeaker(node) {
     if (!node.classList.contains('prof')) return;
     if (node.querySelector('.speak')) return;
+    // Pause/play toggle — left of the speaker.
+    const tog = document.createElement('div');
+    tog.className = 'pause-toggle';
+    tog.title = window._ttsPaused ? 'Продолжить' : 'Пауза';
+    tog.innerHTML = window._ttsPaused ? _PLAY_SVG : _PAUSE_SVG;
+    tog.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (!bridge) return;
+      if (window._ttsPaused) {
+        bridge.tts_resume();
+        window._ttsPaused = false;
+      } else {
+        bridge.tts_pause();
+        window._ttsPaused = true;
+      }
+      _refreshPauseToggles();
+    });
+    node.appendChild(tog);
+    // Speaker — right edge. Re-reads the bubble's text from start; this
+    // is a fresh playback, so any previous pause state is moot.
     const btn = document.createElement('div');
     btn.className = 'speak';
     btn.title = 'Прочитать вслух';
@@ -103,10 +151,12 @@
     btn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       if (!bridge) return;
-      // Read the bubble's text without the icon node.
+      // Read the bubble's text without the icon nodes.
       const clone = node.cloneNode(true);
-      const ic = clone.querySelector('.speak'); if (ic) ic.remove();
+      clone.querySelectorAll('.speak, .pause-toggle').forEach(n => n.remove());
       bridge.read_aloud(clone.textContent.trim());
+      window._ttsPaused = false;
+      _refreshPauseToggles();
     });
     node.appendChild(btn);
   }

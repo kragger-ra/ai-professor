@@ -74,6 +74,16 @@ class BoardCommander:
         """Ask the tutor to hot-swap the active RAG corpus to this package."""
         self._emit("load_course", path=str(path))
 
+    def tts_pause(self) -> None:
+        """Pause current TTS — interrupt without clearing the answer stack.
+        The cut sentence stays unvoiced; a later tts_resume picks up
+        from that same sentence with no LLM call."""
+        self._emit("tts_pause")
+
+    def tts_resume(self) -> None:
+        """Resume the paused answer from where playback was cut."""
+        self._emit("tts_resume")
+
     def audio_mode(self, mode: str) -> None:
         """Persist the audio mode (``local`` / ``meeting``).
 

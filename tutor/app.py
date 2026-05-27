@@ -199,6 +199,24 @@ def main() -> None:
     # Mutable holder so the IPC handler can update the active mode after a swap.
     _active_mode = [mode]
 
+    def _on_tts_pause(cmd: dict) -> None:
+        """Pause the currently-voicing answer. Setting interrupt makes
+        PlaybackThread's watcher break the chunk loop on the next ~30ms
+        tick; the cut sentence is NOT marked voiced, so a resume re-voices
+        it for context. The interrupt flag stays set — capture clears it
+        on the next real utterance or on resume below."""
+        log("app", "TTS paused from board")
+        interrupt.set()
+
+    def _on_tts_resume(cmd: dict) -> None:
+        """Resume the paused answer. We push an empty-utterance interruption
+        record into the agent's input queue; the agent already treats this
+        as a 'no-transcript interruption' and calls _handle_continue —
+        which is exactly the path that re-voices the cut sentence from
+        memory without an LLM round-trip."""
+        log("app", "TTS resume from board")
+        input_q.put(("", True))
+
     def _on_audio_mode(cmd: dict) -> None:
         """Hot-swap the audio devices and persist the new mode.
 
@@ -265,6 +283,8 @@ def main() -> None:
         "remove_comment":   _on_remove_comment,
         "load_course":      _on_load_course,
         "audio_mode":       _on_audio_mode,
+        "tts_pause":        _on_tts_pause,
+        "tts_resume":       _on_tts_resume,
     })
     cmd_tail.start()
 
