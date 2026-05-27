@@ -10,6 +10,7 @@ Thread contract (identical to the Phase-1 console stub):
 """
 from __future__ import annotations
 
+import concurrent.futures
 import io
 import os
 import queue
@@ -37,6 +38,18 @@ SILENCE_THRESHOLD = 300          # base RMS gate during silence
 SILENCE_THRESHOLD_WHILE_TTS = 700  # raised gate while TTS is active
 SPEECH_MIN_BLOCKS = 4            # ~0.4s to confirm real speech
 SILENCE_AFTER_SPEECH_BLOCKS = 10  # ~1.0s of silence to finalize utterance
+# Speculative early transcription: kick off Whisper on the speech buffer
+# after a SHORT silence pause (default 300ms = 3 blocks). By the time the
+# full SILENCE_AFTER_SPEECH_BLOCKS window confirms end-of-utterance, the
+# transcript is usually already done — we emit immediately instead of
+# waiting another ~500ms for transcription. If the student resumes
+# speaking before the full window closes, the speculation is marked stale
+# and a fresh transcription runs on the complete buffer at finalization.
+SPECULATIVE_TRANSCRIBE_BLOCKS = int(
+    os.getenv("STT_SPECULATIVE_BLOCKS", "3")
+)
+# 0 disables speculation entirely (fallback to legacy behaviour).
+_SPECULATIVE_ENABLED = SPECULATIVE_TRANSCRIBE_BLOCKS > 0
 
 # Accumulator: collect short segments before flushing to agent
 _STT_ACCUMULATE_PAUSE = 2.0      # seconds of silence = "end of thought"
@@ -187,6 +200,11 @@ class CaptureThread(threading.Thread):
         self.transcript_sink: Optional[Callable[[str], None]] = None
         # Set by app.py once the capture loop has loaded Whisper.
         self.recognizer: Optional[FasterWhisperSTT] = None
+        # Live device swap support — see swap_device(). The run() loop checks
+        # _pending_device between audio blocks; when set, it tears down the
+        # current sd.InputStream and re-enters with the new device.
+        self._pending_device: Optional[str] = None
+        self._device_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Public API
@@ -201,15 +219,21 @@ class CaptureThread(threading.Thread):
     def stop(self) -> None:
         self._running = False
 
+    def swap_device(self, device_name: str) -> None:
+        """Hot-swap the mic input device. Run loop picks the change up
+        between audio blocks (~100 ms granularity), closes the current
+        sd.InputStream, and re-opens with the new device. Safe to call
+        from any thread."""
+        with self._device_lock:
+            self._pending_device = device_name
+        log("capture", f"swap requested -> '{device_name}'")
+
     # ------------------------------------------------------------------
     # Thread body
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        device_index: Optional[int] = None
-        if self._device_name:
-            device_index = find_mic_device(self._device_name)
-
+        # One-time setup — Whisper survives device swaps.
         stt_device = os.getenv("STT_COMPUTE_DEVICE", "cuda")
         log("capture", f"loading Whisper on {stt_device}...")
         recognizer = FasterWhisperSTT(device=stt_device)
@@ -218,131 +242,215 @@ class CaptureThread(threading.Thread):
         self.recognizer = recognizer
         log("capture", "Whisper ready — listening")
 
-        speech_buffer: list = []
-        silence_count = 0
-        is_speaking = False
-        # True if the professor was voicing when this utterance began — i.e.
-        # the student actually interrupted (vs. asking after a finished answer).
-        was_interruption = False
+        # Speculative-STT plumbing — pool + lock persist across swaps so
+        # a swap doesn't dump an in-flight transcription request.
+        spec_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="stt-spec"
+        )
+        # Whisper itself isn't thread-safe; serialize speculation vs.
+        # finalization calls through this lock so they never race on CUDA.
+        whisper_lock = threading.Lock()
 
-        # Per-run accumulator state (avoids module-level mutable globals)
-        stt_accumulator: list = []
-        stt_last_segment_time: float = 0.0
+        # Outer loop — one iteration per opened sd.InputStream. A device
+        # swap breaks the inner loop, falls through to the next iteration,
+        # and re-opens the stream with the new device.
+        while self._running:
+            with self._device_lock:
+                if self._pending_device is not None:
+                    self._device_name = self._pending_device
+                    self._pending_device = None
+            device_index: Optional[int] = None
+            if self._device_name:
+                device_index = find_mic_device(self._device_name)
 
-        try:
-            with sd.InputStream(
-                samplerate=SAMPLE_RATE,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=BLOCK_SIZE,
-                device=device_index,
-            ) as stream:
-                self.ready.set()   # mic stream open — pipeline is listening
-                while self._running:
-                    data, _overflowed = stream.read(BLOCK_SIZE)
-                    if self.paused.is_set():
-                        # PTT mode: capture is suspended. Drain any partial
-                        # speech state so a resume doesn't carry over stale
-                        # audio, then wait for the unpause.
-                        if is_speaking:
-                            speech_buffer.clear()
-                            is_speaking = False
-                            was_interruption = False
-                        if stt_accumulator:
-                            stt_accumulator = []
-                        continue
-                    audio_chunk = data[:, 0]  # mono
-                    rms = float(np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2)))
+            # Fresh per-stream state — a swap throws away any in-flight
+            # utterance buffer; the user starts speaking on the new device.
+            speech_buffer: list = []
+            silence_count = 0
+            is_speaking = False
+            # True if the professor was voicing when this utterance began —
+            # i.e. the student actually interrupted (vs. asking after a
+            # finished answer).
+            was_interruption = False
+            stt_accumulator: list = []
+            stt_last_segment_time: float = 0.0
+            spec_future: Optional[concurrent.futures.Future] = None
+            spec_stale = False
 
-                    # Check accumulator flush (~every 100 ms)
-                    if stt_accumulator:
-                        pause = time.time() - stt_last_segment_time
-                        total_chars = sum(len(s) for s in stt_accumulator)
-                        if pause > _STT_ACCUMULATE_PAUSE or (
-                            total_chars > _STT_ACCUMULATE_MAX_CHARS and pause > 1.0
-                        ):
-                            full_text = " ".join(stt_accumulator)
-                            stt_accumulator = []
-                            log("capture", f"flush accumulator: '{full_text}'")
-                            self._dispatch_transcript(full_text, was_interruption)
-                            is_speaking = False
-
-                    # Anti-echo: raise the gate while TTS is actively playing
-                    _tts_on = (
-                        self._tts_active is not None and self._tts_active.is_set()
-                    )
-                    gate = SILENCE_THRESHOLD_WHILE_TTS if _tts_on else SILENCE_THRESHOLD
-
-                    if rms > gate:
-                        # ---- Speech detected ----
-                        if not is_speaking:
-                            is_speaking = True
-                            speech_buffer.clear()
-                            silence_count = 0
-                            # The professor voicing right now => this is a
-                            # real interruption, not an independent question.
-                            was_interruption = _tts_on
-                            log("capture", f"speech started (RMS={rms:.0f}, "
-                                           f"interruption={was_interruption})")
-                            # Signal the agent immediately on first speech sample
-                            self._interrupt.set()
-                        speech_buffer.append(audio_chunk.copy())
-                        silence_count = 0
-                    else:
-                        if is_speaking:
-                            speech_buffer.append(audio_chunk.copy())
-                            silence_count += 1
-
-                            # Interrupt TTS after SPEECH_MIN_BLOCKS confirmed
-                            # (interrupt was already set at speech onset above;
-                            # this is a no-op if already set, which is fine).
-                            if len(speech_buffer) == SPEECH_MIN_BLOCKS:
-                                self._interrupt.set()
-                                log(
-                                    "capture",
-                                    f"TTS interrupt confirmed after "
-                                    f"{SPEECH_MIN_BLOCKS} blocks",
-                                )
-
-                            if silence_count >= SILENCE_AFTER_SPEECH_BLOCKS:
-                                is_speaking = False
-                                text = None
-                                if len(speech_buffer) >= SPEECH_MIN_BLOCKS:
-                                    text = self._transcribe(
-                                        recognizer, speech_buffer
-                                    )
-                                else:
-                                    log("capture", "too short, skipping")
-                                if text:
-                                    stt_accumulator.append(text)
-                                    stt_last_segment_time = time.time()
-                                    # Flush immediately — one utterance per
-                                    # silence window is the simple path.
-                                    full_text = " ".join(stt_accumulator)
-                                    stt_accumulator = []
-                                    log("capture", f"utterance: '{full_text}'")
-                                    self._dispatch_transcript(full_text, was_interruption)
-                                else:
-                                    # No usable transcript (cough / noise /
-                                    # backchannel). The speech onset already
-                                    # fired the interrupt Event — clear it, else
-                                    # a false blip stays stuck SET and playback
-                                    # drops every following answer.
-                                    self._interrupt.clear()
-                                    if was_interruption:
-                                        # An answer was mid-playback — ask the
-                                        # agent to resume the cut-off answer.
-                                        log("capture", "interruption, no "
-                                            "transcript - resume signal")
-                                        self._input_q.put(("", was_interruption))
-                                    else:
-                                        log("capture",
-                                            "false blip - interrupt cleared")
+            try:
+                with sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=CHANNELS,
+                    dtype="int16",
+                    blocksize=BLOCK_SIZE,
+                    device=device_index,
+                ) as stream:
+                    self.ready.set()   # mic stream open — pipeline is listening
+                    while self._running:
+                        # A swap was requested between blocks — tear down
+                        # this stream and let the outer loop re-open.
+                        with self._device_lock:
+                            if self._pending_device is not None:
+                                log("capture",
+                                    "closing stream for device swap")
+                                break
+                        data, _overflowed = stream.read(BLOCK_SIZE)
+                        if self.paused.is_set():
+                            # PTT mode: capture is suspended. Drain any partial
+                            # speech state so a resume doesn't carry over stale
+                            # audio, then wait for the unpause.
+                            if is_speaking:
                                 speech_buffer.clear()
-        except Exception as exc:
-            log("capture", f"error: {exc}")
-            import traceback
-            traceback.print_exc()
+                                is_speaking = False
+                                was_interruption = False
+                            if stt_accumulator:
+                                stt_accumulator = []
+                            continue
+                        audio_chunk = data[:, 0]  # mono
+                        rms = float(np.sqrt(np.mean(audio_chunk.astype(np.float32) ** 2)))
+
+                        # Check accumulator flush (~every 100 ms)
+                        if stt_accumulator:
+                            pause = time.time() - stt_last_segment_time
+                            total_chars = sum(len(s) for s in stt_accumulator)
+                            if pause > _STT_ACCUMULATE_PAUSE or (
+                                total_chars > _STT_ACCUMULATE_MAX_CHARS and pause > 1.0
+                            ):
+                                full_text = " ".join(stt_accumulator)
+                                stt_accumulator = []
+                                log("capture", f"flush accumulator: '{full_text}'")
+                                self._dispatch_transcript(full_text, was_interruption)
+                                is_speaking = False
+
+                        # Anti-echo: raise the gate while TTS is actively playing
+                        _tts_on = (
+                            self._tts_active is not None and self._tts_active.is_set()
+                        )
+                        gate = SILENCE_THRESHOLD_WHILE_TTS if _tts_on else SILENCE_THRESHOLD
+
+                        if rms > gate:
+                            # ---- Speech detected ----
+                            if not is_speaking:
+                                is_speaking = True
+                                speech_buffer.clear()
+                                silence_count = 0
+                                # The professor voicing right now => this is a
+                                # real interruption, not an independent question.
+                                was_interruption = _tts_on
+                                log("capture", f"speech started (RMS={rms:.0f}, "
+                                               f"interruption={was_interruption})")
+                                # Signal the agent immediately on first speech sample
+                                self._interrupt.set()
+                            speech_buffer.append(audio_chunk.copy())
+                            silence_count = 0
+                            # Speech resumed mid-silence — invalidate any in-flight
+                            # speculation; the buffer keeps growing past the snapshot.
+                            if spec_future is not None:
+                                spec_stale = True
+                        else:
+                            if is_speaking:
+                                speech_buffer.append(audio_chunk.copy())
+                                silence_count += 1
+
+                                # Interrupt TTS after SPEECH_MIN_BLOCKS confirmed
+                                # (interrupt was already set at speech onset above;
+                                # this is a no-op if already set, which is fine).
+                                if len(speech_buffer) == SPEECH_MIN_BLOCKS:
+                                    self._interrupt.set()
+                                    log(
+                                        "capture",
+                                        f"TTS interrupt confirmed after "
+                                        f"{SPEECH_MIN_BLOCKS} blocks",
+                                    )
+
+                                # Speculative early transcription: short pause
+                                # after some speech -> start Whisper now on a
+                                # snapshot of the buffer, so the result is
+                                # (usually) ready by the time silence is finalized.
+                                if (
+                                    _SPECULATIVE_ENABLED
+                                    and spec_future is None
+                                    and silence_count == SPECULATIVE_TRANSCRIBE_BLOCKS
+                                    and len(speech_buffer) >= SPEECH_MIN_BLOCKS
+                                ):
+                                    snapshot = list(speech_buffer)
+                                    spec_stale = False
+                                    spec_future = spec_pool.submit(
+                                        self._transcribe_locked,
+                                        recognizer, snapshot, whisper_lock,
+                                    )
+                                    log("capture",
+                                        f"speculative transcribe started after "
+                                        f"{SPECULATIVE_TRANSCRIBE_BLOCKS} blocks "
+                                        f"of silence")
+
+                                if silence_count >= SILENCE_AFTER_SPEECH_BLOCKS:
+                                    is_speaking = False
+                                    text = None
+                                    if len(speech_buffer) >= SPEECH_MIN_BLOCKS:
+                                        # Use the speculation if it covered the
+                                        # whole utterance; otherwise transcribe
+                                        # the full buffer now.
+                                        if spec_future is not None and not spec_stale:
+                                            try:
+                                                text = spec_future.result(timeout=10.0)
+                                                log("capture",
+                                                    "speculation hit — used early "
+                                                    "transcript")
+                                            except Exception as exc:
+                                                log("capture",
+                                                    f"speculation failed: "
+                                                    f"{type(exc).__name__}: {exc}")
+                                                text = self._transcribe(
+                                                    recognizer, speech_buffer
+                                                )
+                                        else:
+                                            if spec_future is not None:
+                                                log("capture",
+                                                    "speculation stale — re-transcribing")
+                                            text = self._transcribe_locked(
+                                                recognizer, speech_buffer,
+                                                whisper_lock,
+                                            )
+                                    else:
+                                        log("capture", "too short, skipping")
+                                    spec_future = None
+                                    spec_stale = False
+                                    if text:
+                                        stt_accumulator.append(text)
+                                        stt_last_segment_time = time.time()
+                                        # Flush immediately — one utterance per
+                                        # silence window is the simple path.
+                                        full_text = " ".join(stt_accumulator)
+                                        stt_accumulator = []
+                                        log("capture", f"utterance: '{full_text}'")
+                                        self._dispatch_transcript(full_text, was_interruption)
+                                    else:
+                                        # No usable transcript (cough / noise /
+                                        # backchannel). The speech onset already
+                                        # fired the interrupt Event — clear it, else
+                                        # a false blip stays stuck SET and playback
+                                        # drops every following answer.
+                                        self._interrupt.clear()
+                                        if was_interruption:
+                                            # An answer was mid-playback — ask the
+                                            # agent to resume the cut-off answer.
+                                            log("capture", "interruption, no "
+                                                "transcript - resume signal")
+                                            self._input_q.put(("", was_interruption))
+                                        else:
+                                            log("capture",
+                                                "false blip - interrupt cleared")
+                                    speech_buffer.clear()
+            except Exception as exc:
+                # Stream open / read failure (device unplugged, name not
+                # found, etc.). Log, back off, and let the outer loop re-try
+                # — usually the next swap restores a valid device.
+                log("capture", f"stream error on '{self._device_name}': "
+                               f"{type(exc).__name__}: {exc}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1.0)
         log("capture", "exiting")
 
     # ------------------------------------------------------------------
@@ -364,6 +472,16 @@ class CaptureThread(threading.Thread):
                                f"{type(exc).__name__}: {exc}")
             return
         self._input_q.put((text, was_interruption))
+
+    def _transcribe_locked(
+        self,
+        recognizer: FasterWhisperSTT,
+        speech_buffer: list,
+        whisper_lock: threading.Lock,
+    ) -> Optional[str]:
+        """Serialize Whisper calls — model is not safe for concurrent use."""
+        with whisper_lock:
+            return self._transcribe(recognizer, speech_buffer)
 
     def _transcribe(
         self,
