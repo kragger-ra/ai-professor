@@ -226,27 +226,47 @@
     console.error('[board] mermaid failed:', msg);
   }
 
+  function _renderWithTimeout(id, src, timeoutMs) {
+    // mermaid.render returned a hanging promise in some Cyrillic-label
+    // cases (no resolve, no reject). Race it against a timeout so the
+    // node falls back to a visible error instead of staying stuck.
+    return Promise.race([
+      mermaid.render(id, src),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('render timed out after ' + timeoutMs + 'ms')),
+        timeoutMs,
+      )),
+    ]);
+  }
+
   // Per-node render via mermaid.render(id, source). The .run() batching
   // API was failing silently on some nodes (source stayed visible, no
   // data-processed, no thrown error). render() gives us a clean SVG
   // string back per call and surfaces parse errors per-node.
   async function _renderMermaid(root) {
     if (!window.mermaid) {
+      console.error('[board] _renderMermaid: window.mermaid is undefined');
       root.querySelectorAll('.mermaid:not([data-processed])').forEach((n) => {
         _mermaidFail(n, 'mermaid.js не загружен (проверь board/assets/mermaid/).');
       });
       return;
     }
     const nodes = root.querySelectorAll('.mermaid:not([data-processed])');
+    if (!nodes.length) return;
+    console.log('[board] _renderMermaid: ' + nodes.length + ' node(s)');
+    let i = 0;
     for (const node of nodes) {
+      i++;
       const src = node.textContent.trim();
       if (!src) {
         node.dataset.processed = 'true';
         continue;
       }
       const id = 'mmd-' + Math.random().toString(36).slice(2, 10);
+      console.log('[board] render node ' + i + '/' + nodes.length +
+                  ' id=' + id + ' src=' + JSON.stringify(src.slice(0, 80)));
       try {
-        const result = await mermaid.render(id, src);
+        const result = await _renderWithTimeout(id, src, 5000);
         const svg = (result && (result.svg || result)) || '';
         if (!svg || typeof svg !== 'string') {
           _mermaidFail(node, 'mermaid.render не вернул SVG');
@@ -254,6 +274,8 @@
         }
         node.innerHTML = svg;
         node.dataset.processed = 'true';
+        console.log('[board] render OK node ' + i +
+                    ' svg.length=' + svg.length);
         if (result && typeof result.bindFunctions === 'function') {
           try { result.bindFunctions(node); } catch (e) { /* non-fatal */ }
         }

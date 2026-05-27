@@ -23,6 +23,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QSettings, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWebChannel import QWebChannel
+from PySide6.QtWebEngineCore import QWebEnginePage
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QDockWidget, QFileDialog, QHBoxLayout, QInputDialog, QLineEdit,
@@ -43,6 +44,23 @@ from board.documents import DocumentStore
 from board.tail import JsonlTail
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
+
+
+class _LoggingPage(QWebEnginePage):
+    """QWebEnginePage that mirrors JS console messages to Python stdout
+    so 'console.error(...)' from board.html actually shows up in the
+    board process bat log. Mermaid render failures used to silently
+    disappear into the WebEngine console — this surfaces them."""
+
+    _LEVEL = {
+        QWebEnginePage.JavaScriptConsoleMessageLevel.InfoMessageLevel: "INFO",
+        QWebEnginePage.JavaScriptConsoleMessageLevel.WarningMessageLevel: "WARN",
+        QWebEnginePage.JavaScriptConsoleMessageLevel.ErrorMessageLevel: "ERR ",
+    }
+
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        tag = self._LEVEL.get(level, "?   ")
+        print(f"[board-js {tag}] {message}  ({source}:{line})", flush=True)
 _DATA = Path(__file__).resolve().parent.parent / "data"
 _SESSIONS_DIR = _DATA / "sessions"
 
@@ -289,6 +307,7 @@ class MainWindow(QMainWindow):
 
         # --- board (central) -------------------------------------------
         self.board_view = QWebEngineView()
+        self.board_view.setPage(_LoggingPage(self.board_view))
         self._wire_channel(self.board_view)
         self.board_view.load(QUrl.fromLocalFile(str(_ASSETS / "board.html")))
         self.setCentralWidget(self.board_view)
