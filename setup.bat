@@ -93,12 +93,42 @@ rem --- 4. Bootstrap .env -------------------------------------
 if not exist ".env" (
     if exist ".env.example" (
         copy /y ".env.example" ".env" >nul
-        echo [4/4] Created .env from .env.example
+        echo [4/5] Created .env from .env.example
     ) else (
         echo [warn] .env.example missing, cannot create .env
     )
 ) else (
-    echo [4/4] .env already exists, left untouched
+    echo [4/5] .env already exists, left untouched
+)
+
+rem --- 5. Local embedding model (bge-m3 GGUF, ~261 MB) -------
+rem  Optional — only needed for the 100%-local stack with LM Studio.
+rem  The default config uses OpenAI embeddings, so the model is
+rem  fetched once and parked in resources/embeddings/ for users who
+rem  later install LM Studio and want to point it at our folder.
+rem  Pass --no-bge-m3 to skip.
+set "BGE_DIR=resources\embeddings\bge-m3"
+set "BGE_FILE=%BGE_DIR%\user-bge-m3-q4_k_m.gguf"
+set "BGE_URL=https://huggingface.co/cm4ker/USER-bge-m3-Q4_K_M-GGUF/resolve/main/user-bge-m3-q4_k_m.gguf"
+set "SKIP_BGE=0"
+for %%A in (%*) do (
+    if /I "%%A"=="--no-bge-m3" set "SKIP_BGE=1"
+)
+if "%SKIP_BGE%"=="1" (
+    echo [5/5] Skipping bge-m3 download ^(--no-bge-m3^)
+) else if exist "%BGE_FILE%" (
+    echo [5/5] bge-m3 already on disk, skipping download
+) else (
+    echo [5/5] Downloading bge-m3 embedding model ^(261 MB^)...
+    echo       ^(skip with: setup.bat --no-bge-m3 — OpenAI embeddings still work^)
+    if not exist "%BGE_DIR%" mkdir "%BGE_DIR%"
+    curl -L --fail --progress-bar -o "%BGE_FILE%" "%BGE_URL%"
+    if errorlevel 1 (
+        echo       ^(download failed — not fatal; OpenAI embeddings still work^)
+        if exist "%BGE_FILE%" del "%BGE_FILE%"
+    ) else (
+        echo       saved to %BGE_FILE%
+    )
 )
 
 echo.

@@ -241,3 +241,8 @@ docs/*.xlsx
 # Local smoke/run logs (smoke.{err,out}, board_smoke.{err,out}, etc.)
 *.err
 *.out
+
+# Local embedding model weights — downloaded by setup.bat from HuggingFace.
+# 261 MB GGUF exceeds GitHub's 100 MB per-file limit; we fetch instead of
+# committing. Tester clone is small; setup pulls weights on first run.
+resources/embeddings/**/*.gguf

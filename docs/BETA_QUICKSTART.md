@@ -30,6 +30,60 @@
 - **PySide6 board** — стартует тем же bat-скриптом параллельно.
 - **OpenAI embeddings** — используются через тот же `OPENAI_API_KEY`
   что и основная модель, без отдельной настройки.
+- **bge-m3 GGUF** — `setup.bat` скачивает специальную версию модели
+  (`cm4ker/USER-bge-m3-Q4_K_M-GGUF`, 261 МБ) в
+  `resources/embeddings/bge-m3/` для опционального локального стека
+  через LM Studio. Можно пропустить флагом `setup.bat --no-bge-m3`.
+
+## Внешние зависимости (опциональные но желательные)
+
+### FFmpeg (нужен для транскрипции видео)
+
+Используется `pydub` для извлечения аудио из видеофайлов
+(`Видеоматериалы → Загрузить видео…`). Без него остальной тьютор
+работает; падает только видео-пайплайн.
+
+**Windows**:
+1. Скачай статическую сборку: https://www.gyan.dev/ffmpeg/builds/
+   → раздел «release builds» → `ffmpeg-release-essentials.zip`.
+2. Распакуй например в `C:\ffmpeg\`.
+3. Добавь `C:\ffmpeg\bin\` в `PATH`:
+   `Win+R → sysdm.cpl → вкладка Дополнительно → Переменные среды →
+   изменить Path → Создать → C:\ffmpeg\bin → OK ×3`.
+4. Проверь: открой новый cmd → `ffmpeg -version` → должна показаться
+   версия.
+
+Альтернатива через winget: `winget install Gyan.FFmpeg` (PATH
+обновится автоматически после перезапуска cmd).
+
+**Linux**: `sudo apt install ffmpeg` (Debian/Ubuntu) или
+`sudo dnf install ffmpeg` (Fedora).
+
+**Mac**: `brew install ffmpeg`.
+
+### NVIDIA CUDA (нужен для GPU-ускорения STT)
+
+Faster-Whisper использует ctranslate2; начиная с версии 4.x CUDA-
+библиотеки **вшиты в pip-пакет**, отдельный CUDA Toolkit ставить **не
+надо**. Достаточно свежего драйвера NVIDIA.
+
+**Что нужно проверить**:
+1. У тебя есть карта NVIDIA (десктоп — RTX 20xx и новее; ноутбук — то
+   же поколение).
+2. Драйвер NVIDIA установлен и не древний:
+   - `nvidia-smi` в cmd должна вернуть таблицу с GPU и версией драйвера.
+   - Если команды нет — скачай драйвер: https://www.nvidia.com/Download/index.aspx
+3. (Опционально) `setup.bat` сам ставит `onnxruntime-gpu` если
+   обнаружит драйвер. Можно вручную:
+   `.venv\Scripts\python.exe -m pip install -e ".[gpu]"`.
+
+В `.env`: `STT_COMPUTE_DEVICE="cuda"` (это дефолт). Если GPU не
+обнаружится — Faster-Whisper упадёт на CPU автоматически и напишет
+в лог.
+
+**Без GPU**: ставь `STT_COMPUTE_DEVICE="cpu"`, всё будет работать
+медленнее в 3-5 раз. На современном CPU вполне юзабельно для коротких
+реплик; долгие видео транскрибировать ощутимо дольше.
 
 ## Шаг 1 — клонировать и установить
 
