@@ -461,14 +461,35 @@ class MainWindow(QMainWindow):
         a_save_session.triggered.connect(self._save_session_as)
         file_menu.addAction(a_save_session)
         file_menu.addSeparator()
-        file_menu.addAction(QAction("Экспорт: доска → PDF\tCtrl+E", self,
-                                    triggered=lambda: self._export("board", "pdf")))
-        file_menu.addAction(QAction("Экспорт: доска → HTML\tCtrl+H", self,
-                                    triggered=lambda: self._export("board", "html")))
-        file_menu.addAction(QAction("Экспорт: чат → PDF\tCtrl+Shift+E", self,
-                                    triggered=lambda: self._export("chat", "pdf")))
-        file_menu.addAction(QAction("Экспорт: чат → HTML\tCtrl+Shift+H", self,
-                                    triggered=lambda: self._export("chat", "html")))
+        # Экспорт — две оси: что (доска / чат / доска+чат) × формат (PDF / HTML / MD).
+        export_menu = file_menu.addMenu("Экспорт")
+        for scope_key, scope_label, shortcut_hint in (
+            ("board", "Только доска", "Ctrl+E"),
+            ("chat", "Только чат", "Ctrl+Shift+E"),
+            ("combined", "Доска + чат", ""),
+        ):
+            sub = export_menu.addMenu(scope_label)
+            for fmt, fmt_label in (
+                ("pdf", "→ PDF"),
+                ("html", "→ HTML"),
+                ("md", "→ Markdown"),
+            ):
+                act = QAction(fmt_label, self)
+                # Defaults: Ctrl+E exports board→PDF, Ctrl+Shift+E exports chat→PDF
+                # (matches the previous shortcut for the most common case).
+                if fmt == "pdf" and shortcut_hint:
+                    act.setShortcut(QKeySequence(shortcut_hint))
+                act.triggered.connect(
+                    lambda _checked=False, s=scope_key, f=fmt: self._export(s, f))
+                sub.addAction(act)
+        # Импорт — обратная операция. PDF read-only, не парсится.
+        import_menu = file_menu.addMenu("Импорт")
+        a_import_html = QAction("Сессию из HTML…", self)
+        a_import_html.triggered.connect(lambda: self._import_session("html"))
+        import_menu.addAction(a_import_html)
+        a_import_md = QAction("Сессию из Markdown…", self)
+        a_import_md.triggered.connect(lambda: self._import_session("md"))
+        import_menu.addAction(a_import_md)
         file_menu.addSeparator()
         a_settings = QAction("Настройки подключений…", self)
         a_settings.triggered.connect(self._open_connections_settings)
@@ -1107,31 +1128,105 @@ class MainWindow(QMainWindow):
     # Export
     # ------------------------------------------------------------------
 
-    def _export(self, pane: str, fmt: str) -> None:
-        view = self.board_view if pane == "board" else self.chat_pane.view
-        default_name = f"{pane}-export.{fmt}"
-        title = f"Сохранить {pane}.{fmt}"
-        filter_ = "PDF (*.pdf)" if fmt == "pdf" else "HTML (*.html *.htm)"
-        path_str, _ = QFileDialog.getSaveFileName(self, title, default_name, filter_)
+    def _export(self, scope: str, fmt: str) -> None:
+        """Export the session in one of nine (scope × format) combinations.
+
+        scope: 'board' | 'chat' | 'combined'
+        fmt:   'pdf'   | 'html' | 'md'
+        """
+        scope_name = {"board": "доска", "chat": "чат",
+                      "combined": "сессия"}.get(scope, scope)
+        default_name = f"{scope}-export.{fmt}"
+        filter_ = {
+            "pdf":  "PDF (*.pdf)",
+            "html": "HTML (*.html *.htm)",
+            "md":   "Markdown (*.md)",
+        }.get(fmt, "")
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, f"Сохранить {scope_name} в {fmt.upper()}",
+            default_name, filter_)
         if not path_str:
             return
         out_path = Path(path_str)
-        if fmt == "pdf":
-            exporter.export_pdf(view, out_path, on_done=self._on_export_done)
-        else:
-            try:
-                if pane == "board":
-                    n = exporter.export_html_board(self._jsonl_path, out_path)
+        try:
+            if fmt == "md":
+                if scope == "board":
+                    n = exporter.export_md_board(self._jsonl_path, out_path)
+                elif scope == "chat":
+                    n = exporter.export_md_chat(self._jsonl_path, out_path)
                 else:
+                    n = exporter.export_md_combined(self._jsonl_path, out_path)
+                self.statusBar().showMessage(
+                    f"Markdown сохранён: {out_path} ({n} элемент(ов))", 5000)
+            elif fmt == "html":
+                if scope == "board":
+                    n = exporter.export_html_board(self._jsonl_path, out_path)
+                elif scope == "chat":
                     n = exporter.export_html_chat(self._jsonl_path, out_path)
+                else:
+                    n = exporter.export_html_combined(self._jsonl_path, out_path)
                 self.statusBar().showMessage(
                     f"HTML сохранён: {out_path} ({n} элемент(ов))", 5000)
-            except Exception as exc:
-                self.statusBar().showMessage(f"экспорт упал: {exc}", 5000)
+            elif fmt == "pdf":
+                if scope == "combined":
+                    self.statusBar().showMessage(
+                        "Готовлю PDF (доска + чат)…", 3000)
+                    exporter.export_pdf_combined(
+                        self._jsonl_path, out_path,
+                        on_done=self._on_export_done)
+                else:
+                    view = (self.board_view if scope == "board"
+                            else self.chat_pane.view)
+                    exporter.export_pdf(view, out_path,
+                                        on_done=self._on_export_done)
+        except Exception as exc:
+            self.statusBar().showMessage(f"экспорт упал: {exc}", 5000)
 
     def _on_export_done(self, path: Path, ok: bool) -> None:
         msg = f"PDF сохранён: {path}" if ok else f"PDF НЕ сохранён: {path}"
         self.statusBar().showMessage(msg, 5000)
+
+    def _import_session(self, fmt: str) -> None:
+        """Import a previously-exported HTML / Markdown session and replay
+        it onto the live board + chat panes. PDF is not supported (read-only
+        rasterised content). The imported events overwrite the live view
+        but DO NOT touch the underlying JSONL — close & reopen the live
+        session to return."""
+        filter_ = {"html": "HTML (*.html *.htm)",
+                   "md":   "Markdown (*.md)"}.get(fmt, "")
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, f"Открыть сессию из {fmt.upper()}", "", filter_)
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            from board import importer as _importer
+            events = (_importer.parse_html(path) if fmt == "html"
+                      else _importer.parse_markdown(path))
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Импорт не удался",
+                f"{type(exc).__name__}: {exc}\n\nФайл: {path}")
+            return
+        if not events:
+            self.statusBar().showMessage(
+                f"В файле ничего не найдено: {path}", 4000)
+            return
+        # Clear panes and replay.
+        self.board_view.page().runJavaScript("clearBoard();")
+        self.chat_pane.view.page().runJavaScript("clearChat();")
+        self._last_board_ref_seq = None
+        # Stop the live tail so further runtime events don't mix with the
+        # imported snapshot. The user can return via "Вернуться к текущей".
+        if self.tail is not None:
+            try:
+                self.tail.stop_tail()
+            except Exception:
+                pass
+        for ev in events:
+            self._dispatch(ev)
+        self.statusBar().showMessage(
+            f"Импортировано: {len(events)} событий из {path.name}", 6000)
 
     # ------------------------------------------------------------------
 
