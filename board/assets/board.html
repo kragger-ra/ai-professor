@@ -199,9 +199,10 @@
       buf.push('[' + level + '] ' + text);
       while (buf.length > 12) buf.shift();
       const el = document.getElementById('mmd-debug');
-      if (el) {
+      // Update the buffer but DO NOT auto-show. Overlay stays hidden by
+      // default; Alt+D toggles it on demand when the user wants to peek.
+      if (el && !el.classList.contains('hidden')) {
         el.textContent = buf.join('\n');
-        el.classList.remove('hidden');
       }
     }
     const origLog = console.log.bind(console);
@@ -214,7 +215,14 @@
       if (ev.altKey && (ev.key === 'd' || ev.key === 'D' ||
                         ev.key === 'в' || ev.key === 'В')) {
         const el = document.getElementById('mmd-debug');
-        if (el) el.classList.toggle('hidden');
+        if (!el) return;
+        el.classList.toggle('hidden');
+        // When the overlay is opened, render the buffered log lines that
+        // accumulated while it was hidden so the user sees recent state
+        // immediately, not an empty box.
+        if (!el.classList.contains('hidden')) {
+          el.textContent = buf.join('\n');
+        }
       }
     });
   })();
