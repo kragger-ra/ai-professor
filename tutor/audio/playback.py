@@ -25,6 +25,8 @@ from typing import Optional
 import numpy as np
 import sounddevice as sd
 
+from tutor.audio.fillers import FillerCue
+from tutor.audio.postfx import make_postfx_from_env
 from tutor.tts.vosk_client import (
     generate_silence,
     pause_for_sentence,
@@ -49,9 +51,19 @@ SOUND_DEVICE_SR = int(os.getenv("SOUND_DEVICE_SR", "48000"))
 class AudioProcessor:
     """Owns the main speaker and plays PCM audio via sounddevice (shared mode)."""
 
-    def __init__(self) -> None:
+    def __init__(self, device_name: Optional[str] = None) -> None:
         self.device_sr = SOUND_DEVICE_SR
         self._last_interrupt_time: float = 0.0
+        # Output device — explicit name takes priority over env default. The
+        # mode toggle in the board UI feeds the name in via PlaybackThread.
+        self._device_name = (
+            device_name if device_name is not None else SOUND_DEVICE_OUT
+        )
+        # Optional DSP post-processing chain (Pedalboard + pyloudnorm).
+        # None unless env TTS_POSTFX=on AND pedalboard is importable.
+        self._postfx = make_postfx_from_env()
+        if self._postfx is not None:
+            log("playback", "TTS post-FX enabled (TTS_POSTFX=on)")
         self._setup_main_audio_devices()
 
     # ------------------------------------------------------------------
@@ -89,9 +101,9 @@ class AudioProcessor:
         # its own COM init, so it works inside a worker thread. The soundcard
         # library is intentionally NOT used (its COM enumeration crashes in a
         # bare thread with CO_E_NOTINITIALIZED).
-        self._main_sd_index = self._find_sd_output_index(SOUND_DEVICE_OUT)
+        self._main_sd_index = self._find_sd_output_index(self._device_name)
         if self._main_sd_index is None:
-            log("playback", f"sounddevice fallback to system default for '{SOUND_DEVICE_OUT}'")
+            log("playback", f"sounddevice fallback to system default for '{self._device_name}'")
         else:
             try:
                 info = sd.query_devices(self._main_sd_index)
@@ -125,6 +137,12 @@ class AudioProcessor:
         """Resample to device SR, then play via sounddevice (shared mode)."""
         import librosa
 
+        # Apply DSP post-processing at the source sample rate — the EQ /
+        # de-esser need the original treble content, which gets blurred by
+        # an up-resample. PostFX is a no-op when TTS_POSTFX is not enabled.
+        if self._postfx is not None:
+            audio = self._postfx(audio, sample_rate)
+
         target_sr = self.device_sr
         fixed_audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=target_sr)
 
@@ -147,7 +165,7 @@ class AudioProcessor:
         try:
             device_idx = self._main_sd_index
             if device_idx is None:
-                device_idx = self._find_sd_output_index(SOUND_DEVICE_OUT)
+                device_idx = self._find_sd_output_index(self._device_name)
                 self._main_sd_index = device_idx
             data = audio.astype(np.float32, copy=False)
             if data.ndim == 1:
@@ -170,6 +188,15 @@ class AudioProcessor:
         """Signal _play_safe to break out of its chunk loop on next iteration."""
         self._last_interrupt_time = time.time()
 
+    def swap_output(self, device_name: str) -> None:
+        """Hot-swap the playback output device. Takes effect from the NEXT
+        ``_play_safe`` call — the currently-voicing chunk finishes on the
+        old device. Safe to call from any thread."""
+        self._device_name = device_name
+        self._main_sd_index = self._find_sd_output_index(device_name)
+        log("playback",
+            f"output -> '{device_name}' (idx={self._main_sd_index})")
+
 
 # ---------------------------------------------------------------------------
 # PlaybackThread
@@ -183,11 +210,13 @@ class PlaybackThread(threading.Thread):
     cut sentence is NOT marked voiced, so a resume re-voices it for context.
     """
 
-    def __init__(self, tts_q: queue.Queue, interrupt: threading.Event) -> None:
+    def __init__(self, tts_q: queue.Queue, interrupt: threading.Event,
+                 output_device: Optional[str] = None) -> None:
         super().__init__(name="playback", daemon=True)
         self._tts_q = tts_q
         self._interrupt = interrupt
         self._running = True
+        self._output_device = output_device
         # Set while a sentence is being voiced — CaptureThread reads this as
         # its anti-echo gate (raise the VAD threshold while the tutor talks).
         self.speaking = threading.Event()
@@ -199,12 +228,20 @@ class PlaybackThread(threading.Thread):
     def stop(self) -> None:
         self._running = False
 
+    def swap_output(self, device_name: str) -> None:
+        """Forward a hot-swap request to the AudioProcessor once it exists.
+        Before the playback thread has started its run() loop the request is
+        cached and applied at AudioProcessor construction."""
+        self._output_device = device_name
+        if self._audio_processor is not None:
+            self._audio_processor.swap_output(device_name)
+
     # ------------------------------------------------------------------
     # Thread body
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        self._audio_processor = AudioProcessor()
+        self._audio_processor = AudioProcessor(device_name=self._output_device)
         while self._running:
             try:
                 answer = self._tts_q.get(timeout=0.3)
@@ -217,13 +254,35 @@ class PlaybackThread(threading.Thread):
             if self.muted.is_set():
                 # TTS muted from the board UI — mark the answer fully voiced
                 # so resume logic does not later try to read it aloud, then
-                # silently drop it.
+                # silently drop it. Filler cues are dropped silently — no
+                # voiced_index to advance.
+                if isinstance(answer, FillerCue):
+                    continue
                 try:
                     answer.mark_voiced(len(answer.sentences))
                 except Exception:
                     pass
                 continue
+            if isinstance(answer, FillerCue):
+                self._play_filler(answer)
+                continue
             self._voice_answer(answer)
+
+    # ------------------------------------------------------------------
+    # Voicing a filler cue
+    # ------------------------------------------------------------------
+
+    def _play_filler(self, cue: FillerCue) -> None:
+        """Play a short pre-rendered cue. Interruptible like any TTS chunk."""
+        ap = self._audio_processor
+        self.speaking.set()
+        try:
+            log("playback", f"filler: {cue.text}")
+            ap.play_sound(cue.audio, cue.sr, blocking=True)
+        except Exception as exc:
+            log("playback", f"filler skipped ({type(exc).__name__}: {exc})")
+        finally:
+            self.speaking.clear()
 
     # ------------------------------------------------------------------
     # Voicing one Answer
