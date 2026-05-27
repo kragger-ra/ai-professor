@@ -2,28 +2,33 @@
 
 Lists every directory under courses/ (and a couple of fallback roots) that
 contains a course_config.yml. Lets the user activate / delete / open the
-package or kick off the Builder for a new one.
+package, export a course as a single .zip for sharing, import one back,
+or kick off the Builder for a new one. A preview pane on the right shows
+metadata + the first chunk of corpus text for the selected course.
 
 Activation does not happen here directly — it emits ``activate_requested``
 so the main window can send ``BoardCommander.load_course(path)``.
 """
 from __future__ import annotations
 
+import html as html_mod
 import shutil
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDockWidget, QHeaderView, QMessageBox, QTableView,
-    QToolBar, QVBoxLayout, QWidget,
+    QAbstractItemView, QDockWidget, QFileDialog, QHeaderView, QMessageBox,
+    QSplitter, QTableView, QTextBrowser, QToolBar, QVBoxLayout, QWidget,
 )
 
-from board.courses_scan import CourseEntry, scan_courses
+from board.courses_scan import CourseEntry, read_course_yaml, scan_courses
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _COURSES_DIR = _REPO_ROOT / "courses"
+_TEXT_EXTS = (".md", ".markdown", ".txt")
 
 
 class CourseTableModel(QStandardItemModel):
@@ -115,15 +120,22 @@ class CourseManagerDock(QDockWidget):
         a_new.triggered.connect(self.build_requested)
         a_activate = QAction("Активировать", self)
         a_activate.triggered.connect(self._on_activate)
+        a_export = QAction("Экспорт…", self)
+        a_export.triggered.connect(self.export_selected)
+        a_import = QAction("Импорт из .zip…", self)
+        a_import.triggered.connect(self.import_zip)
         a_delete = QAction("Удалить", self)
         a_delete.triggered.connect(self._on_delete)
-        a_open = QAction("Открыть в проводнике", self)
+        a_open = QAction("В проводнике", self)
         a_open.triggered.connect(self._on_open_folder)
         a_refresh = QAction("Обновить", self)
         a_refresh.triggered.connect(self.refresh)
-        for a in (a_new, a_activate, a_delete, a_open, a_refresh):
+        for a in (a_new, a_activate, a_export, a_import, a_delete, a_open, a_refresh):
             tb.addAction(a)
         layout.addWidget(tb)
+
+        # Split: table | preview
+        splitter = QSplitter(Qt.Horizontal)
 
         # Table
         self._model = CourseTableModel(self)
@@ -148,7 +160,24 @@ class CourseManagerDock(QDockWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self._view.doubleClicked.connect(lambda _idx: self._on_activate())
-        layout.addWidget(self._view)
+        self._view.selectionModel().currentRowChanged.connect(
+            lambda _cur, _prev: self._refresh_preview()
+        )
+        splitter.addWidget(self._view)
+
+        # Preview
+        self._preview = QTextBrowser()
+        self._preview.setOpenExternalLinks(False)
+        self._preview.setStyleSheet(
+            "QTextBrowser { background:#0d1110; color:#cfcfcf; "
+            "border:0; padding:8px 10px; font-size:12px; }"
+        )
+        self._preview.setHtml(self._empty_preview_html())
+        splitter.addWidget(self._preview)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        layout.addWidget(splitter)
 
         self.setWidget(body)
 
@@ -160,6 +189,7 @@ class CourseManagerDock(QDockWidget):
     def refresh(self) -> None:
         entries = scan_courses()
         self._model.set_entries(entries)
+        self._refresh_preview()
 
     def set_current(self, path: str) -> None:
         self._model.set_current(path or "")
@@ -213,3 +243,252 @@ class CourseManagerDock(QDockWidget):
                                 f"{type(exc).__name__}: {exc}")
             return
         self.refresh()
+
+    # ------------------------------------------------------------------
+    # Export / import
+    # ------------------------------------------------------------------
+
+    def export_selected(self) -> None:
+        """Pack the selected course directory into a single .zip the user
+        picks via a save dialog. Internal layout inside the archive uses
+        the course's short_name as the top-level folder."""
+        row = self._selected_row()
+        path = self._model.path_at(row)
+        short = self._model.short_at(row)
+        if not path:
+            QMessageBox.information(
+                self, "Экспорт", "Сначала выбери курс в списке.")
+            return
+        src = Path(path)
+        if not src.is_dir():
+            QMessageBox.warning(self, "Экспорт",
+                                f"Папка курса не найдена:\n{src}")
+            return
+        default_name = (short or src.name) + ".zip"
+        default_path = str(Path.home() / "Desktop" / default_name)
+        zip_path, _ = QFileDialog.getSaveFileName(
+            self, "Куда сохранить курс", default_path, "ZIP (*.zip)")
+        if not zip_path:
+            return
+        try:
+            self._zip_directory(src, Path(zip_path),
+                                top_folder=short or src.name)
+        except Exception as exc:
+            QMessageBox.warning(self, "Не удалось упаковать",
+                                f"{type(exc).__name__}: {exc}")
+            return
+        QMessageBox.information(
+            self, "Экспорт",
+            f"Курс «{short}» сохранён в:\n{zip_path}")
+
+    def import_zip(self) -> None:
+        """Read a course .zip and unpack into courses/<short_name>/.
+
+        The archive must contain exactly one course_config.yml — any path
+        depth is fine (we use the directory of that yaml as the package
+        root). short_name is read from the yaml; if absent, the archive's
+        own folder name is used."""
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self, "Импортировать курс", str(Path.home()), "ZIP (*.zip)")
+        if not zip_path:
+            return
+        try:
+            short, dest = self._unzip_course(Path(zip_path), _COURSES_DIR, self)
+        except _ImportAborted:
+            return
+        except Exception as exc:
+            QMessageBox.warning(self, "Не удалось импортировать",
+                                f"{type(exc).__name__}: {exc}")
+            return
+        self.refresh()
+        QMessageBox.information(
+            self, "Импорт",
+            f"Курс «{short}» распакован в:\n{dest}\n\n"
+            "Активируй его двойным кликом или из меню «Курсы»."
+        )
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _empty_preview_html() -> str:
+        return ('<div style="color:#666;font-style:italic;">'
+                'Выбери курс в списке, чтобы увидеть описание и начало '
+                'корпуса.</div>')
+
+    def _refresh_preview(self) -> None:
+        row = self._selected_row()
+        path = self._model.path_at(row)
+        if not path:
+            self._preview.setHtml(self._empty_preview_html())
+            return
+        try:
+            html = self._build_preview_html(Path(path))
+        except Exception as exc:
+            html = (f'<div style="color:#a05858;">Не удалось прочитать '
+                    f'описание: {html_mod.escape(type(exc).__name__)}: '
+                    f'{html_mod.escape(str(exc))}</div>')
+        self._preview.setHtml(html)
+
+    def _build_preview_html(self, course_dir: Path) -> str:
+        yml = course_dir / "course_config.yml"
+        cfg = read_course_yaml(yml) if yml.exists() else {}
+        course = cfg.get("course") if isinstance(cfg.get("course"), dict) else {}
+        persona = cfg.get("persona") if isinstance(cfg.get("persona"), dict) else {}
+
+        def _esc(v) -> str:
+            return html_mod.escape(str(v).strip()) if v else ""
+
+        name = _esc(course.get("name") or cfg.get("name") or course_dir.name)
+        short = _esc(course.get("short_name") or cfg.get("short_name") or "")
+        topic = _esc(course.get("topic") or cfg.get("topic") or "")
+        audience = _esc(course.get("audience") or "")
+        style = _esc(persona.get("teaching_style") or
+                     course.get("teaching_style") or "")
+        keywords_raw = cfg.get("example_keywords") or course.get("example_keywords")
+        if isinstance(keywords_raw, list):
+            keywords = ", ".join(_esc(k) for k in keywords_raw if k)
+        else:
+            keywords = _esc(keywords_raw or "")
+
+        # Find the first sizeable text file for a corpus preview.
+        sample = ""
+        sample_name = ""
+        for ext in _TEXT_EXTS:
+            for f in sorted(course_dir.rglob(f"*{ext}")):
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                if len(text.strip()) < 50:
+                    continue
+                sample = text.strip()[:500]
+                sample_name = f.name
+                break
+            if sample:
+                break
+
+        parts = [f'<h3 style="color:#ebebeb;margin:0 0 8px 0;">{name}</h3>']
+        if short:
+            parts.append(f'<p><strong>Краткое имя:</strong> {short}</p>')
+        if topic:
+            parts.append(f'<p><strong>Тема:</strong> {topic}</p>')
+        if audience:
+            parts.append(f'<p><strong>Аудитория:</strong> {audience}</p>')
+        if style:
+            short_style = style if len(style) <= 280 else style[:280] + "…"
+            parts.append(f'<p><strong>Стиль:</strong> {short_style}</p>')
+        if keywords:
+            parts.append(f'<p><strong>Ключевые слова:</strong> {keywords}</p>')
+        if sample:
+            parts.append(
+                f'<hr style="border:0;border-top:1px solid #2a3a2a;'
+                f'margin:10px 0;">'
+                f'<p style="color:#888;font-size:11px;">Начало корпуса '
+                f'({html_mod.escape(sample_name)}):</p>'
+                f'<pre style="white-space:pre-wrap;color:#cfcfcf;'
+                f'font-size:11px;">{html_mod.escape(sample)}</pre>'
+            )
+        return "".join(parts)
+
+    # ------------------------------------------------------------------
+    # Static archive helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _zip_directory(src: Path, zip_path: Path, top_folder: str) -> None:
+        """Write every file under ``src`` into ``zip_path`` with arcnames
+        rooted at ``top_folder/...``."""
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in src.rglob("*"):
+                if f.is_dir():
+                    continue
+                arc = Path(top_folder) / f.relative_to(src)
+                zf.write(f, arcname=str(arc).replace("\\", "/"))
+
+    @staticmethod
+    def _unzip_course(zip_path: Path, dest_root: Path,
+                      parent: QWidget) -> tuple[str, Path]:
+        """Unzip into ``dest_root/<short_name>/``.
+
+        Returns ``(short_name, dest_path)``. Raises ``_ImportAborted`` if the
+        user declines to overwrite an existing destination. Other errors
+        propagate to the caller, which surfaces them via QMessageBox.
+        """
+        if not zipfile.is_zipfile(zip_path):
+            raise ValueError("Файл не является ZIP-архивом.")
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            members = zf.namelist()
+            ymls = [m for m in members
+                    if m.endswith("course_config.yml")
+                    and not m.startswith("__MACOSX/")]
+            if not ymls:
+                raise ValueError(
+                    "В архиве нет course_config.yml — это не пакет курса.")
+            if len(ymls) > 1:
+                # Use the shallowest one (least number of path components).
+                ymls.sort(key=lambda p: p.count("/"))
+            yml_member = ymls[0]
+            # Root of the package inside the archive.
+            root_in_zip = yml_member.rsplit("/", 1)[0] if "/" in yml_member else ""
+
+            # Read short_name from the yaml in the archive.
+            try:
+                import yaml as _yaml
+                with zf.open(yml_member) as f:
+                    cfg = _yaml.safe_load(f.read().decode("utf-8")) or {}
+            except Exception:
+                cfg = {}
+            course = cfg.get("course") if isinstance(cfg.get("course"), dict) else {}
+            short = (course.get("short_name") or cfg.get("short_name")
+                     or course.get("name") or cfg.get("name")
+                     or (root_in_zip.split("/")[-1] if root_in_zip
+                         else zip_path.stem)).strip() or zip_path.stem
+
+            dest = (dest_root / short).resolve()
+            try:
+                dest.relative_to(dest_root.resolve())
+            except ValueError:
+                raise ValueError(
+                    "Имя короткого курса делает путь выходящим за courses/.")
+
+            if dest.exists():
+                ans = QMessageBox.question(
+                    parent, "Курс уже существует",
+                    f"Курс «{short}» уже есть в:\n{dest}\n\n"
+                    "Перезаписать содержимое? Старый контент будет удалён.",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+                )
+                if ans != QMessageBox.Yes:
+                    raise _ImportAborted
+                shutil.rmtree(dest)
+            dest.mkdir(parents=True, exist_ok=True)
+
+            # Extract only files belonging to the detected root.
+            for m in members:
+                if m.endswith("/") or m.startswith("__MACOSX/"):
+                    continue
+                if root_in_zip and not m.startswith(root_in_zip + "/"):
+                    if m != yml_member:
+                        continue
+                rel = (m[len(root_in_zip) + 1:] if root_in_zip
+                       else m)
+                if not rel:
+                    continue
+                # Resolve target safely (no .. escapes).
+                target = (dest / rel).resolve()
+                try:
+                    target.relative_to(dest)
+                except ValueError:
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(m) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+
+        return short, dest
+
+
+class _ImportAborted(Exception):
+    """User declined to overwrite an existing destination."""

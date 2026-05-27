@@ -543,11 +543,15 @@ class MainWindow(QMainWindow):
         a_courses_prep = QAction("Подготовить RAG-пакет…", self)
         a_courses_prep.triggered.connect(self._open_course_builder)
         courses_menu.addAction(a_courses_prep)
-        a_courses_share = QAction("Поделиться корпусом…", self)
-        a_courses_share.triggered.connect(
-            lambda: self._stub("Поделиться",
-                               "Упаковать корпус и передать студенту"))
-        courses_menu.addAction(a_courses_share)
+        courses_menu.addSeparator()
+        a_courses_export = QAction("Экспортировать выбранный курс…", self)
+        a_courses_export.triggered.connect(
+            lambda: self.course_manager_dock.export_selected())
+        courses_menu.addAction(a_courses_export)
+        a_courses_import = QAction("Импортировать курс из .zip…", self)
+        a_courses_import.triggered.connect(
+            lambda: self.course_manager_dock.import_zip())
+        courses_menu.addAction(a_courses_import)
 
         # Видеоматериалы (заглушка)
         video_menu = mb.addMenu("Видеоматериалы")
