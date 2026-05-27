@@ -192,6 +192,9 @@
   // mermaid's startOnLoad only handles diagrams present at first paint.
   // securityLevel=loose lets us style nodes; theme=dark fits chalkboard.
   if (window.mermaid) {
+    console.log('[board] mermaid loaded, version:',
+                (mermaid.mermaidAPI && mermaid.mermaidAPI.version
+                 ? mermaid.mermaidAPI.version() : 'unknown'));
     try {
       mermaid.initialize({
         startOnLoad: false,
@@ -209,41 +212,55 @@
         sequence: { actorMargin: 40, useMaxWidth: true },
         securityLevel: 'loose',
       });
-    } catch (e) { /* swallow — failure to init just means no diagrams */ }
+      console.log('[board] mermaid initialized OK');
+    } catch (e) {
+      console.error('[board] mermaid init failed:', e);
+    }
+  } else {
+    console.error('[board] window.mermaid is undefined — script load failed');
   }
   function _mermaidFail(node, msg) {
     node.dataset.processed = 'true';
     node.innerHTML = '<div class="mermaid-error">' +
       'Не удалось отрисовать схему: ' + msg + '</div>';
+    console.error('[board] mermaid failed:', msg);
   }
 
+  // Per-node render via mermaid.render(id, source). The .run() batching
+  // API was failing silently on some nodes (source stayed visible, no
+  // data-processed, no thrown error). render() gives us a clean SVG
+  // string back per call and surfaces parse errors per-node.
   async function _renderMermaid(root) {
     if (!window.mermaid) {
-      // Library never loaded — show the source so it's at least visible.
       root.querySelectorAll('.mermaid:not([data-processed])').forEach((n) => {
         _mermaidFail(n, 'mermaid.js не загружен (проверь board/assets/mermaid/).');
       });
       return;
     }
     const nodes = root.querySelectorAll('.mermaid:not([data-processed])');
-    if (!nodes.length) return;
-    // mermaid.run is batched and either resolves on success or throws on
-    // syntax error. Per-node failure: if a node still lacks data-processed
-    // after the call, mark it manually so it never stays invisible.
-    let batchErr = null;
-    try {
-      await mermaid.run({ nodes });
-    } catch (e) {
-      batchErr = e;
-    }
-    nodes.forEach((n) => {
-      if (!n.dataset.processed) {
-        const detail = batchErr
-          ? (batchErr.message || String(batchErr))
-          : 'парсер mermaid не подтвердил рендер';
-        _mermaidFail(n, detail);
+    for (const node of nodes) {
+      const src = node.textContent.trim();
+      if (!src) {
+        node.dataset.processed = 'true';
+        continue;
       }
-    });
+      const id = 'mmd-' + Math.random().toString(36).slice(2, 10);
+      try {
+        const result = await mermaid.render(id, src);
+        const svg = (result && (result.svg || result)) || '';
+        if (!svg || typeof svg !== 'string') {
+          _mermaidFail(node, 'mermaid.render не вернул SVG');
+          continue;
+        }
+        node.innerHTML = svg;
+        node.dataset.processed = 'true';
+        if (result && typeof result.bindFunctions === 'function') {
+          try { result.bindFunctions(node); } catch (e) { /* non-fatal */ }
+        }
+      } catch (e) {
+        _mermaidFail(node, (e && (e.message || String(e))) || 'unknown error');
+      }
+    }
   }
   // Sticky-bottom autoscroll: only follow new content when the user is
   // already near the bottom; otherwise leave their scroll position alone.
