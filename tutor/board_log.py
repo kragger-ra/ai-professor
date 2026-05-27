@@ -79,13 +79,34 @@ class BoardLog:
 
     def board_item(self, kind: str, body: str, *, ref_seq: int,
                    caption: str = "") -> int:
-        # Normalised dedupe key: strip + collapse whitespace, lower for terms
-        # only (formulas are case-sensitive in LaTeX, code is case-sensitive
-        # in code). For term keys we still lower so "RAG" == "rag".
+        # Normalised dedupe key. The LLM rephrases the SAME concept between
+        # turns ("Вайб-кодинг — итеративная разработка..." then "вайб-кодинг —
+        # создание приложения..."); full-body hashes miss this. For terms we
+        # key on the HEAD only (the name before the first ":") so a second
+        # definition of the same name is suppressed. Formulas and code stay
+        # case-sensitive (LaTeX / syntax matter).
         norm = " ".join(body.split())
-        key = f"{kind.lower()}::{norm.lower() if kind.lower() == 'term' else norm}"
+        kind_l = kind.lower()
+        if kind_l == "term":
+            head = norm.split(":", 1)[0].strip().lower()
+            key = f"term::{head}" if head else f"term::{norm.lower()}"
+        elif kind_l == "fact":
+            # Facts have no syntactic head. Approximate a "concept key" from
+            # the first few meaningful tokens (no stopwords, len > 2) so
+            # paraphrases collide. Intentionally rough — a missed dedup is
+            # a duplicate on the board, an over-eager dedup loses content.
+            import re as _re
+            stop = {"и","в","во","на","с","со","по","за","от","к","не",
+                    "что","это","или","но","для","о","об","что","как",
+                    "так","же","ли","бы","да","ну","вот"}
+            tokens = [t for t in _re.findall(r"\w+", norm.lower())
+                      if t not in stop and len(t) > 2]
+            key = ("fact::" + " ".join(tokens[:5])) if tokens else f"fact::{norm.lower()}"
+        else:
+            key = f"{kind_l}::{norm}"
         with self._lock:
             if key in self._seen_board_bodies:
+                log("board", f"dedup hit ({kind_l}): {body[:60]!r}")
                 return -1
             self._seen_board_bodies.add(key)
         return self._emit("board_item", kind=kind, body=body,
