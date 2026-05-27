@@ -41,12 +41,22 @@
     background:transparent;
     text-align:center;
     overflow-x:auto;
-    /* Hide the raw source until mermaid replaces it with SVG, so the
-       student never sees "flowchart TD\n  A --> B" flash on screen. */
-    color:transparent;
+    color:#ebebeb;
   }
-  .mermaid[data-processed="true"] { color:#ebebeb; }
+  /* Pre-render: hide the raw source text without making the div invisible
+     to children. visibility:hidden cascades into the SVG mermaid will
+     inject; use font-size:0 instead, which collapses the source text but
+     doesn't affect the SVG's intrinsic dimensions. */
+  .mermaid:not([data-processed="true"]) {
+    font-size:0;
+    line-height:0;
+  }
   .mermaid svg { max-width:100%; height:auto; }
+  .mermaid .mermaid-error {
+    font-size:13px; color:#a05858; font-style:italic;
+    white-space:pre-wrap; text-align:left; padding:8px;
+    background:#1a0e0e; border-left:3px solid #a05858; border-radius:4px;
+  }
   /* Native selection highlight — chalk-blue on dark, only the selected
      run of characters lights up, never the whole block. */
   ::selection { background:#2c5282; color:#fff; }
@@ -196,23 +206,39 @@
       });
     } catch (e) { /* swallow — failure to init just means no diagrams */ }
   }
+  function _mermaidFail(node, msg) {
+    node.dataset.processed = 'true';
+    node.innerHTML = '<div class="mermaid-error">' +
+      'Не удалось отрисовать схему: ' + msg + '</div>';
+  }
+
   async function _renderMermaid(root) {
-    if (!window.mermaid) return;
+    if (!window.mermaid) {
+      // Library never loaded — show the source so it's at least visible.
+      root.querySelectorAll('.mermaid:not([data-processed])').forEach((n) => {
+        _mermaidFail(n, 'mermaid.js не загружен (проверь board/assets/mermaid/).');
+      });
+      return;
+    }
     const nodes = root.querySelectorAll('.mermaid:not([data-processed])');
     if (!nodes.length) return;
+    // mermaid.run is batched and either resolves on success or throws on
+    // syntax error. Per-node failure: if a node still lacks data-processed
+    // after the call, mark it manually so it never stays invisible.
+    let batchErr = null;
     try {
       await mermaid.run({ nodes });
     } catch (e) {
-      // A malformed Mermaid block shouldn't kill the board; surface as
-      // a small warning under the offending node.
-      nodes.forEach((n) => {
-        if (!n.dataset.processed) {
-          n.dataset.processed = 'true';
-          n.style.color = '#a05858';
-          n.textContent = '(не удалось отрисовать схему)';
-        }
-      });
+      batchErr = e;
     }
+    nodes.forEach((n) => {
+      if (!n.dataset.processed) {
+        const detail = batchErr
+          ? (batchErr.message || String(batchErr))
+          : 'парсер mermaid не подтвердил рендер';
+        _mermaidFail(n, detail);
+      }
+    });
   }
   // Sticky-bottom autoscroll: only follow new content when the user is
   // already near the bottom; otherwise leave their scroll position alone.
