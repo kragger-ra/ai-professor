@@ -43,6 +43,7 @@ from board.doc_window import DocumentWindow
 from board.documents import DocumentStore
 from board.settings_dialog import ConnectionsDialog
 from board.tail import JsonlTail
+from board.video_manager import TranscribeWorker, VideoManagerDock
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
 
@@ -392,6 +393,17 @@ class MainWindow(QMainWindow):
         self.course_manager_dock.build_requested.connect(
             self._open_course_builder)
 
+        # --- video manager dock (left, hidden by default) --------------
+        # Lives under course manager; user opens it via Видеоматериалы →
+        # Менеджер видео. Hidden initially because most sessions don't use
+        # video and the left rail is already busy.
+        self.video_manager_dock = VideoManagerDock(self)
+        self.video_manager_dock.setStyleSheet(self.artifacts_dock.styleSheet())
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.video_manager_dock)
+        self.tabifyDockWidget(self.course_manager_dock,
+                              self.video_manager_dock)
+        self.video_manager_dock.hide()
+
         # Active course path — kept in sync via the course_loaded event.
         self._current_course_path: str = ""
 
@@ -579,13 +591,15 @@ class MainWindow(QMainWindow):
             lambda: self.course_manager_dock.import_zip())
         courses_menu.addAction(a_courses_import)
 
-        # Видеоматериалы (заглушка)
+        # Видеоматериалы
         video_menu = mb.addMenu("Видеоматериалы")
-        a_video_load = QAction("Загрузить лекцию…", self)
-        a_video_load.triggered.connect(
-            lambda: self._stub("Видеолекция",
-                               "Плеер + транскрипция + чат с ИИ по содержанию"))
+        a_video_load = QAction("Загрузить видео…", self)
+        a_video_load.triggered.connect(self._on_load_video)
         video_menu.addAction(a_video_load)
+        a_video_browse = QAction("Менеджер видео…", self)
+        a_video_browse.triggered.connect(self._show_video_manager)
+        video_menu.addAction(a_video_browse)
+        video_menu.addSeparator()
         a_video_url = QAction("По ссылке…", self)
         a_video_url.triggered.connect(
             lambda: self._stub("Видео по ссылке",
@@ -893,11 +907,12 @@ class MainWindow(QMainWindow):
         menu.addAction(a_reset)
 
     def _all_docks(self) -> list:
-        # Iteration is stable: chat, artifacts, courses (+ future docks).
+        # Iteration is stable: chat, artifacts, courses, video (+ future).
         # Floating docks are still listed so they can be re-toggled.
         out = []
         for d in (self.chat_dock, self.artifacts_dock,
-                  getattr(self, "course_manager_dock", None)):
+                  getattr(self, "course_manager_dock", None),
+                  getattr(self, "video_manager_dock", None)):
             if d is not None:
                 out.append(d)
         return out
@@ -1136,6 +1151,74 @@ class MainWindow(QMainWindow):
         the user has to restart the tutor for the new credentials to be
         picked up — the LLM client reads env at process boot."""
         dlg = ConnectionsDialog(self)
+        dlg.exec()
+
+    def _show_video_manager(self) -> None:
+        """Surface the Video Manager dock — hidden by default until the
+        user actually starts working with video material."""
+        self._set_dock_visible(self.video_manager_dock, True)
+        self.video_manager_dock.refresh()
+
+    def _on_load_video(self) -> None:
+        """Pick a video file, run Faster-Whisper on a background thread,
+        register the transcript in the VideoStore. All work is LOCAL —
+        no API tokens are spent on transcription."""
+        from PySide6.QtWidgets import QProgressDialog
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Выбери видео для транскрипции",
+            "",
+            "Видео (*.mp4 *.mkv *.webm *.mov *.avi *.m4v);;Все файлы (*)",
+        )
+        if not path_str:
+            return
+        video_path = Path(path_str)
+
+        dlg = QProgressDialog(
+            f"Транскрипция видео…\n{video_path.name}",
+            None, 0, 1000, self,
+        )
+        dlg.setWindowTitle("Faster-Whisper")
+        dlg.setMinimumWidth(460)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        # Cancellation mid-Whisper isn't clean — disable Cancel.
+        dlg.setCancelButton(None)
+
+        worker = TranscribeWorker(video_path, language="ru", parent=self)
+        # Keep a strong ref on the window so Qt doesn't GC the thread.
+        self._video_workers = getattr(self, "_video_workers", set())
+        self._video_workers.add(worker)
+
+        def _on_progress(frac: float, text: str) -> None:
+            dlg.setValue(int(frac * 1000))
+            dlg.setLabelText(
+                f"Транскрипция: {frac * 100:.1f}%\n{video_path.name}\n"
+                f"→ {text[:80]}")
+
+        def _on_done(result) -> None:
+            dlg.close()
+            self._video_workers.discard(worker)
+            if isinstance(result, Exception):
+                QMessageBox.warning(
+                    self, "Не удалось транскрибировать",
+                    f"{type(result).__name__}: {result}")
+                return
+            entry = result
+            QMessageBox.information(
+                self, "Видео обработано",
+                f"Файл: {entry.name}\n"
+                f"Длительность: {int(entry.duration_s)}с\n"
+                f"Сегментов: {entry.segments_count}\n\n"
+                f"Транскрипт: {entry.transcript_path}\n"
+                f"Доступно в «Менеджер видео»."
+            )
+            self._show_video_manager()
+            self.video_manager_dock.refresh()
+
+        worker.progress.connect(_on_progress)
+        worker.done.connect(_on_done)
+        worker.start()
         dlg.exec()
 
     def _on_course_activate(self, path: str) -> None:
