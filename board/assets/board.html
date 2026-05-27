@@ -602,9 +602,16 @@
     // children). Skip silently — the comment still shows in the side panel.
   }
 
-  // Patch appendItem to stash raw LaTeX on .formula nodes BEFORE KaTeX rewrites them.
+  // Patch appendItem to stash raw LaTeX on .formula nodes BEFORE KaTeX
+  // rewrites them. The patch fully replaces the original (it does not
+  // call _origAppend), so it MUST replicate every responsibility of the
+  // base function — including the Mermaid render call. Forgetting that
+  // is exactly what made [BOARD-MERMAID] items land in DOM but never
+  // turn into SVGs (the original kept rendering its source as text).
   const _origAppend = appendItem;
   appendItem = function(html) {
+    console.log('[board] appendItem(patched) len=' + html.length +
+                ' preview=' + JSON.stringify(html.slice(0, 100)));
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
     wrap.querySelectorAll('.formula').forEach(el => {
@@ -615,6 +622,7 @@
     const board = document.getElementById('board');
     while (wrap.firstChild) board.appendChild(wrap.firstChild);
     _renderMath(board);
+    _renderMermaid(board);
     if (_stickyBottom) window.scrollTo(0, document.body.scrollHeight);
   };
 </script>
