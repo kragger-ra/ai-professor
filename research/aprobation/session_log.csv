@@ -1,9 +1,0 @@
-ID,date,start_time,course_set,pretest_set,posttest_set,pretest_score,posttest_score,delta,duration_min,tech_issues_min,Q1_clarity,Q2_pace,Q3_adapt,Q4_personal,Q5_stability,Q6_useful,csat_mean,nps,key_quote_positive,key_quote_negative,future_use_idea,notes
-S01,2026-05-18,10:00,A,A,B,,,,,,,,,,,,,,,,,
-S02,2026-05-18,13:00,A,B,A,,,,,,,,,,,,,,,,,
-S03,2026-05-18,16:00,A,A,B,,,,,,,,,,,,,,,,,
-S04,2026-05-19,10:00,A,B,A,,,,,,,,,,,,,,,,,
-S05,2026-05-19,13:00,A,A,B,,,,,,,,,,,,,,,,,
-S06,2026-05-19,16:00,A,B,A,,,,,,,,,,,,,,,,,
-S07,2026-05-20,10:00,A,A,B,,,,,,,,,,,,,,,,,
-S08,2026-05-20,13:00,A,B,A,,,,,,,,,,,,,,,,,
