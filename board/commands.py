@@ -74,6 +74,15 @@ class BoardCommander:
         """Ask the tutor to hot-swap the active RAG corpus to this package."""
         self._emit("load_course", path=str(path))
 
+    def audio_mode(self, mode: str) -> None:
+        """Persist the audio mode (``local`` / ``meeting``).
+
+        Mode takes effect on the NEXT tutor restart — the audio threads
+        hold their devices open from boot. The tutor writes
+        ``data/audio_mode.txt`` so the choice survives across runs.
+        """
+        self._emit("audio_mode", mode=mode)
+
     # ------------------------------------------------------------------
 
     def _emit(self, ctype: str, **fields) -> None:

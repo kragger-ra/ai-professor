@@ -20,8 +20,8 @@ import json
 import uuid
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QSettings, QTimer, QUrl
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -485,6 +485,36 @@ class MainWindow(QMainWindow):
         self.act_mute.setShortcut(QKeySequence("Ctrl+M"))
         self.act_mute.toggled.connect(self._on_mute_toggled)
         audio_menu.addAction(self.act_mute)
+        audio_menu.addSeparator()
+        # Аудио-режим — radio choice. The board persists the pick in QSettings;
+        # the tutor reads data/audio_mode.txt on startup, so the change applies
+        # only after a tutor restart (the audio threads hold their devices open
+        # for the lifetime of the process).
+        mode_menu = audio_menu.addMenu("Аудио-режим")
+        self._mode_group = QActionGroup(self)
+        self._mode_group.setExclusive(True)
+        self.act_mode_local = QAction(
+            "Локальный (микрофон / динамики)", self, checkable=True,
+        )
+        self.act_mode_meeting = QAction(
+            "Режим созвона (виртуальный кабель)", self, checkable=True,
+        )
+        self._mode_group.addAction(self.act_mode_local)
+        self._mode_group.addAction(self.act_mode_meeting)
+        mode_menu.addAction(self.act_mode_local)
+        mode_menu.addAction(self.act_mode_meeting)
+        # Initial state from QSettings; default to local on first launch.
+        settings = QSettings("AI-Professor", "Board")
+        saved_mode = str(settings.value("audio/mode", "local")).strip().lower()
+        if saved_mode not in ("local", "meeting"):
+            saved_mode = "local"
+        self._audio_mode = saved_mode
+        (self.act_mode_meeting if saved_mode == "meeting"
+         else self.act_mode_local).setChecked(True)
+        self.act_mode_local.triggered.connect(
+            lambda: self._on_audio_mode_picked("local"))
+        self.act_mode_meeting.triggered.connect(
+            lambda: self._on_audio_mode_picked("meeting"))
 
         # Курсы
         courses_menu = mb.addMenu("Курсы")
@@ -723,6 +753,26 @@ class MainWindow(QMainWindow):
         self._commander.tts_mute(checked)
         self.statusBar().showMessage(
             "TTS заглушён" if checked else "TTS включён", 3000)
+
+    def _on_audio_mode_picked(self, mode: str) -> None:
+        """User toggled an audio-mode radio. Persist + tell the tutor.
+
+        The tutor hot-swaps both mic and TTS-output devices live — the
+        current sentence finishes on the old output, the new mic comes
+        online within ~100ms. No restart needed.
+        """
+        if mode not in ("local", "meeting"):
+            return
+        self._audio_mode = mode
+        try:
+            settings = QSettings("AI-Professor", "Board")
+            settings.setValue("audio/mode", mode)
+        except Exception:
+            pass
+        self._commander.audio_mode(mode)
+        label = ("Локальный режим (микрофон / динамики)" if mode == "local"
+                 else "Режим созвона (виртуальный кабель)")
+        self.statusBar().showMessage(f"Аудио-режим: {label}", 4000)
 
     def _on_detach_toggled(self, checked: bool) -> None:
         if checked:

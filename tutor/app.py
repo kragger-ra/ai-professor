@@ -21,6 +21,8 @@ import time
 
 from tutor.audio.ambient import AmbientPlayer
 from tutor.audio.capture import CaptureThread
+from tutor.audio.fillers import FillerLibrary
+from tutor.audio.mode import current_mode, devices_for_mode, set_mode
 from tutor.audio.playback import PlaybackThread
 from tutor.brain.agent import AgentThread
 from tutor.brain.answer import Answer
@@ -30,15 +32,14 @@ from tutor.document_store import DocumentStore
 from tutor.util import log
 
 
-def _capture_device() -> str:
-    """Pick the STT input device from the audio mode."""
-    if os.getenv("AUDIO_MODE", "none").lower() == "meeting":
-        # In meeting mode STT listens to the call audio on Voicemeeter Out B2.
-        return "Voicemeeter Out B2"
-    return os.getenv("SOUND_DEVICE_IN", "")
-
-
 def main() -> None:
+    # Resolve the active audio mode (UI sidecar overrides AUDIO_MODE env) and
+    # pick the matching input/output device names. The board UI's audio-mode
+    # menu writes the sidecar file; changes take effect on this restart.
+    mode = current_mode()
+    capture_dev, playback_dev = devices_for_mode(mode)
+    log("app", f"audio mode: {mode} (in={capture_dev or '<system default>'}, "
+               f"out={playback_dev or '<system default>'})")
     # --- shared channels -------------------------------------------------
     input_q: queue.Queue = queue.Queue()   # student utterances -> agent
     tts_q: queue.Queue = queue.Queue()     # answer sentences   -> playback
@@ -57,15 +58,31 @@ def main() -> None:
     # system prompt). Lives outside any thread so handlers + agent share it.
     documents = DocumentStore()
 
+    # Filler library — short pre-rendered cues to cover the wait gap when
+    # the agent starts answering. Warm-up is done in a background thread
+    # so the pipeline boots immediately; until cues are ready, picks return
+    # None and the agent simply skips the filler.
+    fillers = FillerLibrary()
+    threading.Thread(
+        target=fillers.warm_up, daemon=True, name="filler-warmup",
+    ).start()
+
     # --- worker threads --------------------------------------------------
-    agent = AgentThread(input_q, tts_q, interrupt, rag, documents=documents)
-    playback = PlaybackThread(tts_q, interrupt)
+    # Playback must exist before the agent so the agent can hook into
+    # playback.speaking for its filler-gate. PlaybackThread itself is
+    # cheap to construct — the AudioProcessor is built later in run().
+    playback = PlaybackThread(tts_q, interrupt, output_device=playback_dev)
+    agent = AgentThread(
+        input_q, tts_q, interrupt, rag,
+        documents=documents, fillers=fillers,
+        playback_speaking=playback.speaking,
+    )
     capture = CaptureThread(
         input_q,
         interrupt,
         tts_active=playback.speaking,           # anti-echo: raise VAD gate while voicing
         rag_vocab=(rag.get_vocabulary() if rag else set()),
-        device_name=_capture_device(),
+        device_name=capture_dev,
     )
 
     agent.start()
@@ -179,6 +196,35 @@ def main() -> None:
             agent._board.comment_removed(cid)
             log("app", f"comment removed: {cid}")
 
+    # Mutable holder so the IPC handler can update the active mode after a swap.
+    _active_mode = [mode]
+
+    def _on_audio_mode(cmd: dict) -> None:
+        """Hot-swap the audio devices and persist the new mode.
+
+        The capture loop has an outer re-entry layer that reopens its mic
+        sd.InputStream on the next ~100ms block; playback re-resolves its
+        output index on the next ``_play_safe`` call. The current TTS
+        sentence finishes on the old device — interruption-free swap."""
+        new_mode = (cmd.get("mode") or "").strip().lower()
+        if new_mode not in ("local", "meeting"):
+            log("app", f"audio_mode: unknown mode {new_mode!r} - ignored")
+            return
+        if new_mode == _active_mode[0]:
+            log("app", f"audio_mode: already {new_mode!r} — no-op")
+            return
+        new_in, new_out = devices_for_mode(new_mode)
+        log("app", f"audio_mode hot-swap -> {new_mode!r} "
+                   f"(in='{new_in}', out='{new_out}')")
+        try:
+            capture.swap_device(new_in)
+            playback.swap_output(new_out)
+            set_mode(new_mode)
+            _active_mode[0] = new_mode
+        except Exception as exc:
+            log("app", f"audio_mode swap failed: "
+                       f"{type(exc).__name__}: {exc}")
+
     def _on_load_course(cmd: dict) -> None:
         from pathlib import Path as _Path
         path = (cmd.get("path") or "").strip()
@@ -218,6 +264,7 @@ def main() -> None:
         "add_comment":      _on_add_comment,
         "remove_comment":   _on_remove_comment,
         "load_course":      _on_load_course,
+        "audio_mode":       _on_audio_mode,
     })
     cmd_tail.start()
 

@@ -29,6 +29,7 @@ import re
 import threading
 import traceback
 
+from tutor.audio.fillers import FillerLibrary
 from tutor.board_log import BoardLog
 from tutor.brain import commands
 from tutor.brain import meta as meta_agent
@@ -49,6 +50,10 @@ META_TIMEOUT_S = 4.0              # cap how long an answer waits on the meta-age
 HISTORY_TURNS_IN_PROMPT = 6
 DEFAULT_PERSONALITY = "professor_simpler"
 MEMORY_REFRESH_EVERY_TURNS = 6    # refresh cross-session memory this often
+# How long we wait after a question before pushing a filler cue. Tuned so
+# real-LLM happy paths (cache hit / short turns) finish first and the cue
+# never plays. Felt-too-eager at 0s — see user feedback 2026-05-27.
+FILLER_GRACE_S = 0.6
 
 # Answer length and vocabulary are NOT pre-computed here — the main LLM
 # adapts its own style from the conversation (see PROFESSOR_GOAL). The agent
@@ -165,13 +170,23 @@ class AgentThread(threading.Thread):
 
     def __init__(self, input_q: queue.Queue, tts_q: queue.Queue,
                  interrupt: threading.Event, rag_model: RagModel | None,
-                 documents: DocumentStore | None = None):
+                 documents: DocumentStore | None = None,
+                 fillers: FillerLibrary | None = None,
+                 playback_speaking: threading.Event | None = None):
         super().__init__(name="agent", daemon=True)
         self._input_q = input_q
         self._tts_q = tts_q
         self._interrupt = interrupt
         self._rag = rag_model
         self._documents = documents
+        # Optional filler library — short pre-rendered cues scheduled
+        # AFTER a short grace period to cover the meta/RAG/first-token gap.
+        # If the real Answer beats the grace period (cache hit, fast LLM),
+        # the filler is suppressed so it doesn't double up on the response.
+        self._fillers = fillers
+        # Playback's speaking event — used by the filler gate to skip the
+        # cue when a real answer is already being voiced.
+        self._playback_speaking = playback_speaking
         self._running = True
         self._personality = DEFAULT_PERSONALITY
         self._manner = "simpler"          # tracked style; switched by voice command
@@ -388,6 +403,15 @@ class AgentThread(threading.Thread):
 
     def _answer_question(self, utterance: str, nested: bool,
                          long: bool = False) -> None:
+        # Filler cue scheduling: deferred, with an idle-gate. A real "thinking"
+        # pause feels human; firing instantly when the student stops speaking
+        # makes the agent sound nervous. We wait FILLER_GRACE_S and only push
+        # the cue if no real answer has started by then.
+        if self._fillers is not None and not nested:
+            cue = self._fillers.pick()
+            if cue is not None:
+                self._schedule_filler(cue)
+
         # Learn the student's name / background from an introduction — regex
         # only, cheap. Disabled (see _PROFILE_DISABLED): the regex misfires
         # on STT output and writes garbage names.
@@ -474,6 +498,23 @@ class AgentThread(threading.Thread):
         self._student_turns += 1
         if self._student_turns % MEMORY_REFRESH_EVERY_TURNS == 0:
             self._spawn_memory_refresh()
+
+    def _schedule_filler(self, cue) -> None:
+        """Push a filler cue after FILLER_GRACE_S — but only if nothing is
+        already playing or queued. The grace window lets fast paths beat
+        the filler; the idle-gate prevents it from doubling up on a real
+        answer that landed during the wait."""
+        def _push_if_idle() -> None:
+            if self._interrupt.is_set():
+                return
+            if not self._tts_q.empty():
+                return                # an Answer is already queued
+            if self._playback_speaking is not None and self._playback_speaking.is_set():
+                return                # an Answer is already voicing
+            self._tts_q.put(cue)
+        timer = threading.Timer(FILLER_GRACE_S, _push_if_idle)
+        timer.daemon = True
+        timer.start()
 
     def _generate(self, answer: Answer, messages: list,
                   max_tokens: int) -> None:
