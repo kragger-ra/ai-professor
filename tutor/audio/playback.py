@@ -54,6 +54,11 @@ class AudioProcessor:
     def __init__(self, device_name: Optional[str] = None) -> None:
         self.device_sr = SOUND_DEVICE_SR
         self._last_interrupt_time: float = 0.0
+        # Where _play_safe stopped writing on its last call, in TARGET-SR
+        # samples. 0 if the loop completed normally (no cut). Read by the
+        # caller right after play_sound returns to compute the sample offset
+        # for a resume — see PlaybackThread._voice_answer.
+        self._last_cut_target_samples: int = 0
         # Output device — explicit name takes priority over env default. The
         # mode toggle in the board UI feeds the name in via PlaybackThread.
         self._device_name = (
@@ -133,8 +138,16 @@ class AudioProcessor:
         audio: np.ndarray,
         sample_rate: int = 48000,
         blocking: bool = False,
+        start_offset_samples: int = 0,
     ) -> None:
-        """Resample to device SR, then play via sounddevice (shared mode)."""
+        """Resample to device SR, then play via sounddevice (shared mode).
+
+        ``start_offset_samples`` is in samples at the SOURCE ``sample_rate``;
+        we convert it to the target SR for the chunk loop. After return the
+        caller can read ``self._last_cut_target_samples`` to learn where
+        playback stopped (in TARGET-SR samples) if it was interrupted, and
+        translate that back to source SR for a sub-sentence resume.
+        """
         import librosa
 
         # Apply DSP post-processing at the source sample rate — the EQ /
@@ -145,23 +158,40 @@ class AudioProcessor:
 
         target_sr = self.device_sr
         fixed_audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=target_sr)
+        # Map the source-SR offset to target-SR samples — the chunk loop in
+        # _play_safe operates on the resampled buffer.
+        target_offset = int(start_offset_samples * target_sr / sample_rate)
+        if target_offset < 0:
+            target_offset = 0
+        if target_offset >= len(fixed_audio):
+            # Past the end — nothing left to play. Mark as completed.
+            self._last_cut_target_samples = len(fixed_audio)
+            return
 
         if blocking:
-            self._play_safe(fixed_audio, target_sr)
+            self._play_safe(fixed_audio, target_sr, start_offset=target_offset)
         else:
             threading.Thread(
                 target=self._play_safe,
-                args=(fixed_audio, target_sr),
+                args=(fixed_audio, target_sr, target_offset),
                 daemon=True,
             ).start()
 
-    def _play_safe(self, audio: np.ndarray, sr: int) -> None:
+    def _play_safe(self, audio: np.ndarray, sr: int,
+                   start_offset: int = 0) -> None:
         """Play audio to the main output via sounddevice in chunked shared mode.
 
         Checks _last_interrupt_time on every chunk (~100 ms) so an interrupt
-        cuts playback within one chunk period.
+        cuts playback within one chunk period. ``start_offset`` is in
+        target-SR samples — used by sub-sentence resume to skip past the
+        portion already heard before pause.
+
+        On exit ``self._last_cut_target_samples`` reflects the sample index
+        we stopped writing at: equal to len(data) for normal completion,
+        less than len(data) if interrupted.
         """
         start_time = time.time()
+        self._last_cut_target_samples = start_offset
         try:
             device_idx = self._main_sd_index
             if device_idx is None:
@@ -177,10 +207,14 @@ class AudioProcessor:
                 device=device_idx,
                 dtype="float32",
             ) as stream:
-                for i in range(0, len(data), chunk_sz):
+                i = max(0, min(start_offset, len(data)))
+                while i < len(data):
                     if self._last_interrupt_time > start_time:
-                        break
+                        self._last_cut_target_samples = i
+                        return
                     stream.write(data[i: i + chunk_sz])
+                    i += chunk_sz
+                self._last_cut_target_samples = len(data)
         except Exception as exc:
             log("playback", f"playback error: {exc}")
 
@@ -314,6 +348,12 @@ class PlaybackThread(threading.Thread):
                 idx = answer.voiced_index
                 if idx < len(answer.sentences):
                     sentence = answer.sentences[idx]
+                    # Sub-sentence resume: if this sentence was cut earlier
+                    # we start play_sound at its saved sample offset instead
+                    # of zero. Otherwise the cut sentence would replay from
+                    # its first word on every resume.
+                    start_off = (answer.partial_offset
+                                 if answer.partial_idx == idx else 0)
                     # Synthesize + play one sentence. A failure here (Vosk
                     # down, device busy, ...) must NOT stick the whole answer:
                     # log it, skip the sentence, and still advance voiced_index
@@ -334,15 +374,36 @@ class PlaybackThread(threading.Thread):
                                 answer.sentences[idx + 1], "neutral",
                             )
                         if len(audio) > 0:
-                            log("playback", f"> {sentence[:70]}")
-                            ap.play_sound(audio, sr, blocking=True)
+                            tag = (f" (resume @{start_off})"
+                                   if start_off > 0 else "")
+                            log("playback", f">{tag} {sentence[:70]}")
+                            ap.play_sound(audio, sr, blocking=True,
+                                          start_offset_samples=start_off)
                     except Exception as exc:
                         log("playback",
                             f"sentence skipped ({type(exc).__name__}: {exc})")
                         prefetch = None
                     if self._interrupt.is_set():
+                        # Mid-sentence cut. Save the position so resume
+                        # picks up at the same sample offset.
+                        try:
+                            target_cut = self._audio_processor._last_cut_target_samples
+                            target_sr = self._audio_processor.device_sr
+                            # Translate back to source-SR samples — that's
+                            # what start_offset_samples expects on resume.
+                            answer.partial_idx = idx
+                            answer.partial_offset = int(
+                                target_cut * sr / target_sr
+                            )
+                        except Exception:
+                            answer.partial_idx = -1
+                            answer.partial_offset = 0
                         break          # cut mid-sentence — do NOT advance
                     answer.mark_voiced(1)
+                    # Sentence finished cleanly — clear any partial marker
+                    # so a future cut on the NEXT sentence starts fresh.
+                    answer.partial_idx = -1
+                    answer.partial_offset = 0
                     voiced += 1
                     # Short pause before the next sentence.
                     if answer.voiced_index < len(answer.sentences) or answer.generating:

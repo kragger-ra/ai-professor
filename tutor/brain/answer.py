@@ -35,6 +35,13 @@ class Answer:
     sentences: list[str] = field(default_factory=list)
     voiced_index: int = 0          # how many sentences have been voiced
     generating: bool = True        # is the LLM still producing this answer
+    # Sub-sentence resume: when a sentence is cut mid-playback (button pause
+    # or a live interrupt that turns into a resume), we remember which
+    # sentence was cut and at what sample offset (in source SR samples) so
+    # the next play continues from the same point instead of restarting
+    # the whole sentence. -1 means "no partial — start the sentence fresh".
+    partial_idx: int = -1
+    partial_offset: int = 0
 
     def add_sentence(self, text: str) -> None:
         """Generator side: store one freshly produced sentence."""

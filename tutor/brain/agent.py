@@ -52,8 +52,11 @@ DEFAULT_PERSONALITY = "professor_simpler"
 MEMORY_REFRESH_EVERY_TURNS = 6    # refresh cross-session memory this often
 # How long we wait after a question before pushing a filler cue. Tuned so
 # real-LLM happy paths (cache hit / short turns) finish first and the cue
-# never plays. Felt-too-eager at 0s — see user feedback 2026-05-27.
-FILLER_GRACE_S = 0.6
+# never plays. Was 0.6s on first iteration — still felt eager; bumped to
+# 2.5s on user feedback so the cue only fires when the model is actually
+# taking its time (typical meta+RAG+first-token gap is 1.5-3s, so 2.5s
+# only catches the slower paths).
+FILLER_GRACE_S = 2.5
 
 # Answer length and vocabulary are NOT pre-computed here — the main LLM
 # adapts its own style from the conversation (see PROFESSOR_GOAL). The agent
