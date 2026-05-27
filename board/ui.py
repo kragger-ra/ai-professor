@@ -785,20 +785,33 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _open_session(self) -> None:
+        """Open a saved session — JSONL snapshot, HTML export, or Markdown
+        export. The file dialog lists all three; we detect format by suffix
+        and dispatch to the matching loader."""
         start_dir = str(_SESSIONS_DIR if _SESSIONS_DIR.exists() else _DATA)
         path_str, _ = QFileDialog.getOpenFileName(
-            self, "Открыть архив сессии", start_dir,
-            "Session log (board_*.jsonl);;All files (*)"
+            self, "Открыть сессию", start_dir,
+            "Все поддерживаемые (*.jsonl *.html *.htm *.md);;"
+            "JSONL архив (*.jsonl);;HTML (*.html *.htm);;Markdown (*.md);;"
+            "All files (*)"
         )
         if not path_str:
             return
-        self.board_view.page().runJavaScript("clearBoard();")
-        self.chat_pane.view.page().runJavaScript("clearChat();")
-        self._start_tail(Path(path_str), from_start=True)
-        # Wait for replay + KaTeX to settle, then pin both panes to the
-        # last message — what the user expects when reopening a session.
-        QTimer.singleShot(1200, self._scroll_panes_bottom)
-        self.statusBar().showMessage(f"Открыто: {path_str}", 5000)
+        path = Path(path_str)
+        suffix = path.suffix.lower()
+        if suffix in (".html", ".htm"):
+            self._import_session_from_path(path, "html")
+        elif suffix == ".md":
+            self._import_session_from_path(path, "md")
+        else:
+            # JSONL (or unknown — treat as JSONL snapshot replay)
+            self.board_view.page().runJavaScript("clearBoard();")
+            self.chat_pane.view.page().runJavaScript("clearChat();")
+            self._start_tail(path, from_start=True)
+            # Wait for replay + KaTeX to settle, then pin both panes to the
+            # last message — what the user expects when reopening a session.
+            QTimer.singleShot(1200, self._scroll_panes_bottom)
+            self.statusBar().showMessage(f"Открыто: {path_str}", 5000)
 
     def _open_live(self) -> None:
         self.board_view.page().runJavaScript("clearBoard();")
@@ -1187,18 +1200,19 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(msg, 5000)
 
     def _import_session(self, fmt: str) -> None:
-        """Import a previously-exported HTML / Markdown session and replay
-        it onto the live board + chat panes. PDF is not supported (read-only
-        rasterised content). The imported events overwrite the live view
-        but DO NOT touch the underlying JSONL — close & reopen the live
-        session to return."""
+        """Pick an HTML / Markdown file via dialog and import it."""
         filter_ = {"html": "HTML (*.html *.htm)",
                    "md":   "Markdown (*.md)"}.get(fmt, "")
         path_str, _ = QFileDialog.getOpenFileName(
             self, f"Открыть сессию из {fmt.upper()}", "", filter_)
         if not path_str:
             return
-        path = Path(path_str)
+        self._import_session_from_path(Path(path_str), fmt)
+
+    def _import_session_from_path(self, path: Path, fmt: str) -> None:
+        """Parse the file and replay onto live panes. ``fmt`` is 'html' or
+        'md'. The imported events overwrite the live view but DO NOT touch
+        the underlying JSONL — close & reopen the live session to return."""
         try:
             from board import importer as _importer
             events = (_importer.parse_html(path) if fmt == "html"

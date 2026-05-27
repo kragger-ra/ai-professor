@@ -178,11 +178,25 @@ class CourseManagerDock(QDockWidget):
         splitter.setStretchFactor(1, 2)
 
         layout.addWidget(splitter)
+        self._splitter = splitter
 
         self.setWidget(body)
 
+        # Width threshold: hide preview pane when the dock is narrow,
+        # show it again once the user widens it. Picked from feedback —
+        # below ~480 px the preview eats space that should go to the
+        # course table's columns.
+        self._preview_min_width = 480
+
         # Initial scan
         self.refresh()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_preview") and hasattr(self, "_preview_min_width"):
+            wide_enough = self.width() >= self._preview_min_width
+            if self._preview.isVisible() != wide_enough:
+                self._preview.setVisible(wide_enough)
 
     # ------------------------------------------------------------------
 
