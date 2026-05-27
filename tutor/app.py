@@ -59,13 +59,18 @@ def main() -> None:
     documents = DocumentStore()
 
     # Filler library — short pre-rendered cues to cover the wait gap when
-    # the agent starts answering. Warm-up is done in a background thread
-    # so the pipeline boots immediately; until cues are ready, picks return
-    # None and the agent simply skips the filler.
-    fillers = FillerLibrary()
-    threading.Thread(
-        target=fillers.warm_up, daemon=True, name="filler-warmup",
-    ).start()
+    # the agent starts answering. Off by default (env FILLERS=on enables
+    # warm-up + use). User feedback 2026-05-27: cues felt distracting at
+    # the current cadence; the agent skips them silently when fillers=None.
+    if os.getenv("FILLERS", "off").strip().lower() in ("on", "1", "true", "yes"):
+        fillers = FillerLibrary()
+        threading.Thread(
+            target=fillers.warm_up, daemon=True, name="filler-warmup",
+        ).start()
+        log("app", "fillers ENABLED (FILLERS=on)")
+    else:
+        fillers = None
+        log("app", "fillers disabled (set FILLERS=on to enable)")
 
     # --- worker threads --------------------------------------------------
     # Playback must exist before the agent so the agent can hook into
