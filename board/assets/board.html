@@ -62,6 +62,19 @@
     white-space:pre-wrap; text-align:left; padding:8px;
     background:#1a0e0e; border-left:3px solid #a05858; border-radius:4px;
   }
+  /* Diagnostic overlay — bottom-left, always visible. Shows the last
+     mermaid log line so the user can see what's failing without
+     digging into a minimised cmd window. Toggle via Alt+D. */
+  #mmd-debug {
+    position:fixed; bottom:8px; left:8px;
+    max-width:80%; max-height:30vh; overflow:auto;
+    background:rgba(20,30,25,0.92); border:1px solid #3a4a3a;
+    border-radius:4px; padding:6px 10px;
+    font-family:ui-monospace, Consolas, monospace; font-size:11px;
+    color:#c0d0c0; z-index:200; white-space:pre-wrap;
+    pointer-events:none;
+  }
+  #mmd-debug.hidden { display:none; }
   /* Native selection highlight — chalk-blue on dark, only the selected
      run of characters lights up, never the whole block. */
   ::selection { background:#2c5282; color:#fff; }
@@ -162,6 +175,7 @@
 </div>
 
 <div id="ctx"></div>
+<div id="mmd-debug" class="hidden"></div>
 
 <script>
   // ---------- Bridge to Python via QWebChannel ----------
@@ -169,6 +183,41 @@
   new QWebChannel(qt.webChannelTransport, function(ch) {
     bridge = ch.objects.bridge;
   });
+
+  // ---------- Diagnostic overlay (Alt+D to toggle) ----------
+  // The board's stdout lives in a minimised cmd window the user rarely
+  // sees, so reroute the diagnostic console.log/error calls into a
+  // floating panel on the page itself. The overlay starts visible
+  // whenever there's any [board] log line; Alt+D collapses or expands it.
+  (function() {
+    const buf = [];
+    function _push(level, args) {
+      const text = args.map((a) =>
+        typeof a === 'string' ? a : JSON.stringify(a)
+      ).join(' ');
+      if (text.indexOf('[board') !== 0 && level === 'log') return; // only [board]* logs
+      buf.push('[' + level + '] ' + text);
+      while (buf.length > 12) buf.shift();
+      const el = document.getElementById('mmd-debug');
+      if (el) {
+        el.textContent = buf.join('\n');
+        el.classList.remove('hidden');
+      }
+    }
+    const origLog = console.log.bind(console);
+    const origWarn = console.warn.bind(console);
+    const origErr = console.error.bind(console);
+    console.log = function() { origLog.apply(console, arguments); _push('log', [...arguments]); };
+    console.warn = function() { origWarn.apply(console, arguments); _push('warn', [...arguments]); };
+    console.error = function() { origErr.apply(console, arguments); _push('err', [...arguments]); };
+    document.addEventListener('keydown', (ev) => {
+      if (ev.altKey && (ev.key === 'd' || ev.key === 'D' ||
+                        ev.key === 'в' || ev.key === 'В')) {
+        const el = document.getElementById('mmd-debug');
+        if (el) el.classList.toggle('hidden');
+      }
+    });
+  })();
 
   // ---------- KaTeX render ----------
   const KATEX_OPTS = {
@@ -244,6 +293,9 @@
   // data-processed, no thrown error). render() gives us a clean SVG
   // string back per call and surfaces parse errors per-node.
   async function _renderMermaid(root) {
+    const all = root.querySelectorAll('.mermaid').length;
+    const fresh = root.querySelectorAll('.mermaid:not([data-processed])').length;
+    console.log('[board] _renderMermaid called: total=' + all + ' fresh=' + fresh);
     if (!window.mermaid) {
       console.error('[board] _renderMermaid: window.mermaid is undefined');
       root.querySelectorAll('.mermaid:not([data-processed])').forEach((n) => {
@@ -253,7 +305,7 @@
     }
     const nodes = root.querySelectorAll('.mermaid:not([data-processed])');
     if (!nodes.length) return;
-    console.log('[board] _renderMermaid: ' + nodes.length + ' node(s)');
+    console.log('[board] _renderMermaid: ' + nodes.length + ' node(s) to process');
     let i = 0;
     for (const node of nodes) {
       i++;
@@ -293,6 +345,9 @@
     _stickyBottom = dist < 40;
   }, { passive: true });
   function appendItem(html) {
+    if (html.indexOf('class="mermaid"') >= 0) {
+      console.log('[board] appendItem: incoming mermaid HTML, length=' + html.length);
+    }
     const wrap = document.createElement('div');
     wrap.innerHTML = html;
     const board = document.getElementById('board');
