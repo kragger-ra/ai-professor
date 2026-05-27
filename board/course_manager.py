@@ -11,11 +11,13 @@ so the main window can send ``BoardCommander.load_course(path)``.
 """
 from __future__ import annotations
 
+import hashlib
 import html as html_mod
 import shutil
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable, Tuple
 
 from PySide6.QtCore import QSize, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QFont, QStandardItem, QStandardItemModel
@@ -422,6 +424,64 @@ class CourseManagerDock(QDockWidget):
                 arc = Path(top_folder) / f.relative_to(src)
                 zf.write(f, arcname=str(arc).replace("\\", "/"))
 
+    # Hashing — used to detect "this zip is already imported" and refuse
+    # the duplicate import. The hash is computed over the SORTED list of
+    # (relative_path, sha256(content)) tuples so it's independent of file
+    # order inside the archive / directory.
+    @staticmethod
+    def _hash_files(files: Iterable[Tuple[str, bytes]]) -> str:
+        outer = hashlib.sha256()
+        for rel_path, data in sorted(files, key=lambda x: x[0]):
+            outer.update(rel_path.encode("utf-8"))
+            outer.update(b"\x00")
+            outer.update(hashlib.sha256(data).digest())
+            outer.update(b"\x00")
+        return outer.hexdigest()
+
+    @staticmethod
+    def _zip_content_hash(zip_path: Path, root_in_zip: str) -> str:
+        files: list[Tuple[str, bytes]] = []
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for m in zf.namelist():
+                if m.endswith("/") or m.startswith("__MACOSX/"):
+                    continue
+                if root_in_zip and not m.startswith(root_in_zip + "/"):
+                    continue
+                rel = m[len(root_in_zip) + 1:] if root_in_zip else m
+                if not rel:
+                    continue
+                rel = rel.replace("\\", "/")
+                with zf.open(m) as fh:
+                    files.append((rel, fh.read()))
+        return CourseManagerDock._hash_files(files)
+
+    @staticmethod
+    def _dir_content_hash(course_dir: Path) -> str:
+        files: list[Tuple[str, bytes]] = []
+        for f in course_dir.rglob("*"):
+            if f.is_dir():
+                continue
+            rel = str(f.relative_to(course_dir)).replace("\\", "/")
+            try:
+                data = f.read_bytes()
+            except Exception:
+                continue
+            files.append((rel, data))
+        return CourseManagerDock._hash_files(files)
+
+    @staticmethod
+    def _find_duplicate_course(zip_hash: str) -> Path | None:
+        """Return the path of an existing course whose content matches the
+        given zip-hash, or None if no duplicate exists."""
+        for entry in scan_courses():
+            cdir = Path(entry.path)
+            try:
+                if CourseManagerDock._dir_content_hash(cdir) == zip_hash:
+                    return cdir
+            except Exception:
+                continue
+        return None
+
     @staticmethod
     def _unzip_course(zip_path: Path, dest_root: Path,
                       parent: QWidget) -> tuple[str, Path]:
@@ -460,6 +520,18 @@ class CourseManagerDock(QDockWidget):
                      or course.get("name") or cfg.get("name")
                      or (root_in_zip.split("/")[-1] if root_in_zip
                          else zip_path.stem)).strip() or zip_path.stem
+
+            # Duplicate-content guard: if any existing course on disk has
+            # byte-identical contents to this archive, refuse the import.
+            zip_hash = CourseManagerDock._zip_content_hash(zip_path, root_in_zip)
+            existing = CourseManagerDock._find_duplicate_course(zip_hash)
+            if existing is not None:
+                QMessageBox.information(
+                    parent, "Курс уже импортирован",
+                    f"Такой же курс уже лежит в:\n{existing}\n\n"
+                    "Содержимое архива побайтово совпадает с существующим — "
+                    "повторный импорт не нужен.")
+                raise _ImportAborted
 
             dest = (dest_root / short).resolve()
             try:
