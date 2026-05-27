@@ -41,6 +41,7 @@ from board.course_manager import CourseManagerDock
 from board.course_switcher import CourseQuickSwitcher
 from board.doc_window import DocumentWindow
 from board.documents import DocumentStore
+from board.settings_dialog import ConnectionsDialog
 from board.tail import JsonlTail
 
 _ASSETS = Path(__file__).resolve().parent / "assets"
@@ -468,6 +469,10 @@ class MainWindow(QMainWindow):
                                     triggered=lambda: self._export("chat", "pdf")))
         file_menu.addAction(QAction("Экспорт: чат → HTML\tCtrl+Shift+H", self,
                                     triggered=lambda: self._export("chat", "html")))
+        file_menu.addSeparator()
+        a_settings = QAction("Настройки подключений…", self)
+        a_settings.triggered.connect(self._open_connections_settings)
+        file_menu.addAction(a_settings)
         file_menu.addSeparator()
         a_quit = QAction("Выход", self, shortcut=QKeySequence("Ctrl+Q"))
         a_quit.triggered.connect(self.close)
@@ -1029,6 +1034,13 @@ class MainWindow(QMainWindow):
     def _show_course_manager(self) -> None:
         self._set_dock_visible(self.course_manager_dock, True)
         self.course_manager_dock.refresh()
+
+    def _open_connections_settings(self) -> None:
+        """Open the LLM provider / API keys dialog. Saving persists to .env;
+        the user has to restart the tutor for the new credentials to be
+        picked up — the LLM client reads env at process boot."""
+        dlg = ConnectionsDialog(self)
+        dlg.exec()
 
     def _on_course_activate(self, path: str) -> None:
         if not path:
