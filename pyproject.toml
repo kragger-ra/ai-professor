@@ -33,7 +33,10 @@ dependencies = [
     "websockets~=15.0.1",
 ]
 
-[dependency-groups]
+[project.optional-dependencies]
+# Standard PEP 621 extras — pip-compatible. Install with:
+#   pip install -e ".[stt,simpletts,board,postfx]"
+# uv reads the same section via --extra.
 dev = [
     "black~=25.9.0",
     "isort~=7.0.0",
@@ -46,19 +49,34 @@ simpletts = [
     "scipy~=1.15.3",
     "fastapi~=0.115",
     "uvicorn~=0.32",
-    "stressrnn",
+    "stressrnn @ git+https://github.com/Desklop/StressRNN.git",
     "num2words~=0.5",
 ]
 stt = [
     "faster-whisper~=1.2.0",
 ]
 gpu = [
-    "onnxruntime-gpu~=1.23.2"
+    "onnxruntime-gpu~=1.23.2",
 ]
 board = [
     "PySide6~=6.7",
 ]
 postfx = [
+    "pedalboard~=0.9",
+    "pyloudnorm~=0.1",
+]
+# Convenience meta-extra for the standard tester install — everything
+# the beta walkthrough needs in a single token.
+beta = [
+    "edge-tts~=6.1.9",
+    "vosk-tts~=0.3.61",
+    "scipy~=1.15.3",
+    "fastapi~=0.115",
+    "uvicorn~=0.32",
+    "stressrnn @ git+https://github.com/Desklop/StressRNN.git",
+    "num2words~=0.5",
+    "faster-whisper~=1.2.0",
+    "PySide6~=6.7",
     "pedalboard~=0.9",
     "pyloudnorm~=0.1",
 ]
@@ -71,7 +89,3 @@ include = ["tutor*", "board*"]
 
 [tool.uv]
 package = true
-default-groups = ["dev", "stt"]
-
-[tool.uv.sources]
-stressrnn = { git = "https://github.com/Desklop/StressRNN.git" }
