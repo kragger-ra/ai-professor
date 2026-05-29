@@ -58,6 +58,31 @@ daemon), запускаются из `tutor/app.py`:
 
 Ни `multiprocessing`, ни `Manager`, ни IPC, ни прокси-объектов.
 
+```mermaid
+flowchart LR
+    Mic([Микрофон]) --> STT["capture/STT<br/>faster-whisper-large-v3-turbo-russian"]
+    STT -- "input_q (Queue)" --> Agent[Agent основной поток]
+    Agent --> Preflight{{Preflight pool<br/>ThreadPoolExecutor max=2}}
+    Preflight -. параллельно .-> RAG["RAG-поиск<br/>FAISS + bge-m3"]
+    Preflight -. параллельно .-> Meta["Мета-агент<br/>gpt-5.4-mini"]
+    RAG --> Agent
+    Meta --> Agent
+    Agent --> LLM["LLM stream<br/>GPT-5.4"]
+    LLM --> Seg[Sentence segmenter<br/>объект «Ответ»]
+    Seg -- "tts_q (Queue)" --> Playback["playback<br/>Vosk-TTS :22232 (CPU)"]
+    Playback --> Spk([Динамики])
+    STT -. "interrupt (Event)" .-> Agent
+    STT -. "interrupt (Event)" .-> Playback
+    Playback -. "speaking (Event)" .-> STT
+```
+
+> **Рисунок:** data flow голосового конвейера. Сплошные линии — нормальный
+> поток данных через очереди. Пунктирные — события прерывания и анти-эхо.
+> Preflight pool выполняет RAG-поиск и мета-агентный анализ параллельно;
+> общая задержка определяется максимумом из двух. Замеры — `01_inventory.md`.
+
+ASCII-фоллбэк (для тех, кто читает в терминале или в среде без mermaid):
+
 ```
         +-------------------- interrupt (Event) --------------------+
         v                                                          |
