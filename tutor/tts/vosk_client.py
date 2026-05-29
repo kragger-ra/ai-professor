@@ -60,9 +60,10 @@ def _sanitize_for_vosk(text: str) -> str:
     # 2. Drop any stray backticks (paired ones are already stripped upstream
     #    by core_agent._strip_markdown_for_tts; this catches the lone ones).
     text = text.replace('`', '')
-    # 3. Replace path/identifier separators with spaces so Vosk reads them
-    #    as word boundaries instead of choking.
-    text = re.sub(r'[/\\]', ' ', text)
+    # 3. Replace path/identifier separators and LaTeX braces/delimiters with
+    #    spaces so Vosk reads them as word boundaries instead of crashing.
+    #    Bare '\\', '{', '}' make the server G2P throw → HTTP 500.
+    text = re.sub(r'[/\\{}$]', ' ', text)
     text = re.sub(r'_', ' ', text)
     # 4. Transliterate any latin words that survived the pronunciation map.
     #    Course-specific terms (SQLite, LangChain, etc.) are already replaced

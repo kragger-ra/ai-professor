@@ -255,8 +255,50 @@ _SPLIT_BARE_CONJUNCTIONS = re.compile(
 # Pipeline functions
 # =========================================================================
 
+# =========================================================================
+# LaTeX cleanup — the LLM is asked to verbalise formulas, but it sometimes
+# leaks raw LaTeX (\frac{...}, x_{i}, \sqrt{...}). Vosk's G2P CRASHES on a
+# bare backslash or curly brace (→ HTTP 500), so we must neutralise them here.
+# Known commands map to spoken Russian; unknown \commands are dropped.
+# =========================================================================
+_LATEX_WORDS = {
+    "frac": "дробь", "dfrac": "дробь", "tfrac": "дробь",
+    "sqrt": "корень из", "cdot": "умножить на", "times": "умножить на",
+    "div": "разделить на", "pm": "плюс минус", "mp": "минус плюс",
+    "leq": "меньше или равно", "le": "меньше или равно",
+    "geq": "больше или равно", "ge": "больше или равно",
+    "neq": "не равно", "ne": "не равно", "approx": "приблизительно равно",
+    "equiv": "тождественно равно", "infty": "бесконечность",
+    "sum": "сумма", "prod": "произведение", "int": "интеграл",
+    "alpha": "альфа", "beta": "бета", "gamma": "гамма", "delta": "дельта",
+    "epsilon": "эпсилон", "theta": "тета", "lambda": "лямбда", "mu": "мю",
+    "pi": "пи", "sigma": "сигма", "phi": "фи", "omega": "омега",
+    "partial": "частная производная", "in": "принадлежит",
+    "forall": "для всех", "exists": "существует", "rightarrow": "стрелка",
+}
+_RE_LATEX_CMD = re.compile(r"\\([a-zA-Z]+)")
+
+
+def strip_latex(text: str) -> str:
+    """Neutralise LaTeX artifacts so leaked formula markup never reaches the
+    Vosk G2P (which crashes on bare '\\', '{', '}')."""
+    # Math-mode delimiters: $$..$$, $..$, \(..\), \[..\]
+    text = re.sub(r"\$\$?", " ", text)
+    text = text.replace(r"\(", " ").replace(r"\)", " ")
+    text = text.replace(r"\[", " ").replace(r"\]", " ")
+    # \command -> spoken word (or dropped if unknown)
+    text = _RE_LATEX_CMD.sub(lambda m: " " + _LATEX_WORDS.get(m.group(1).lower(), "") + " ", text)
+    # Subscript/superscript braces and any stray braces
+    text = text.replace("{", " ").replace("}", " ")
+    # Any remaining lone backslashes (\\ line breaks, \, thin spaces, etc.)
+    text = text.replace("\\", " ")
+    return text
+
+
 def clean_markup(text: str) -> str:
     """Remove markdown, HTML tags, and other non-speech artifacts."""
+    # Neutralise LaTeX first (bare \ and {} crash the Vosk G2P)
+    text = strip_latex(text)
     # Remove code blocks
     text = re.sub(r"```[\s\S]*?```", " ", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
@@ -639,6 +681,22 @@ def apply_stress_overrides(text: str) -> str:
     return _RE_STRESS_TOKEN.sub(_repl, text)
 
 
+# =========================================================================
+# Final whitelist — the Vosk g2p phoneme_id_map has only ~63 keys and raises
+# KeyError on ANY character it doesn't know (e.g. '@', '\\', '{', '}', '=').
+# After all conversions (Latin→Cyrillic, numbers→words, math→words) the text
+# must contain only speakable chars: Cyrillic, whitespace, the '+' stress
+# marker, and a small punctuation set. Drop anything else so leaked symbols
+# never crash synthesis.
+# =========================================================================
+_RE_UNSPEAKABLE = re.compile(r"[^а-яёА-ЯЁ\s+.,!?:;\-'()]")
+
+
+def drop_unspeakable(text: str) -> str:
+    text = _RE_UNSPEAKABLE.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def preprocess_tts(text: str) -> str:
     """Full normalization pipeline for Vosk-TTS."""
     text = clean_markup(text)
@@ -657,4 +715,6 @@ def preprocess_tts(text: str) -> str:
     text = apply_stress_overrides(text)
     # Transliterate any remaining Latin characters
     text = transliterate_latin(text)
+    # Final safety net: strip anything the g2p phoneme map can't handle
+    text = drop_unspeakable(text)
     return text.strip()

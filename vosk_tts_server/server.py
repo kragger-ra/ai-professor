@@ -77,7 +77,18 @@ def _synthesize(text: str, speaker_id: int, speech_rate: float, skip_normalize: 
         text = preprocess_tts(text)
     t_norm = time.perf_counter()
 
-    audio = synth.synth_audio(text, speaker_id=speaker_id, speech_rate=speech_rate)
+    # Normalisation can reduce input to nothing (pure symbols/punctuation);
+    # the G2P crashes on empty input, so degrade to a short silence instead.
+    if not text.strip():
+        log.warning("[TTS] empty text after normalize — returning silence")
+        return np.zeros(int(SAMPLE_RATE * 0.3), dtype=np.int16)
+
+    try:
+        audio = synth.synth_audio(text, speaker_id=speaker_id, speech_rate=speech_rate)
+    except Exception as e:
+        # A single un-synthesizable sentence must not 500 the whole pipeline.
+        log.error(f"[TTS] synth failed on {text[:120]!r}: {type(e).__name__}: {e}")
+        return np.zeros(int(SAMPLE_RATE * 0.3), dtype=np.int16)
     audio = _deess(audio)
     t_synth = time.perf_counter()
 
