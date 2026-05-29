@@ -134,4 +134,4 @@ python -m tutor.brain.answer    # объект «Ответ» и стек
 ```
 
 План фаз и команды запуска — `tutor/README.md`. Голосовые команды и
-walkthrough — `docs/VOICE_COMMANDS.md`, `docs/VOICE_WALKTHROUGH.md`.
+справочник — `docs/VOICE_COMMANDS.md`. Квикстарт — `docs/BETA_QUICKSTART.md`.

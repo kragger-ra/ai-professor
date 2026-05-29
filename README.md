@@ -1,9 +1,9 @@
 # AI Professor — Tutor (v2)
 
 Голосовой ИИ-тьютор для **индивидуальной работы студента** с собственным
-учебным материалом. Загружает курс из своих файлов (`.md` / `.txt` / `.pdf`),
-отвечает на вопросы голосом со ссылкой на материал, ведёт кросс-сессионную
-память и адаптируется к манере общения студента.
+учебным материалом. Загружает курс из своих файлов (`.md` / `.txt` / `.pdf` /
+`.docx`), отвечает на вопросы голосом со ссылкой на материал, ведёт
+кросс-сессионную память и адаптируется к манере общения студента.
 
 **Платформа:** ИТМО AI Talent Hub · **Трек ВКР:** Образовательный · **Ветка:** `tutor-v2`
 
@@ -22,13 +22,24 @@
   мгновенная пауза.
 - **Кросс-сессионная память + профиль студента** — тезисный rolling summary
   предыдущих сессий, сохраняется между запусками.
-- **Голосовая загрузка курса** — «загрузи персоналаб» / «загрузи курс
-  программирование» — hot-swap FAISS-индекса без рестарта.
 - **Манеры общения** — «говори формально / дружелюбно / нейтрально» (3 пресета
   стиля ответа).
 - **Board sidecar (опционально)** — отдельный PySide6-процесс: chalk-доска
   с KaTeX, Telegram-чат, ридер PDF/DOCX/MD. См. `board/` и
   `docs/ARCHITECTURE.md`.
+
+## Два режима работы
+
+| | Облачный (по умолчанию) | Полностью локальный |
+|---|---|---|
+| LLM | OpenAI / любой litellm-провайдер | Gemma E4B через LM Studio |
+| Эмбеддинги RAG | OpenAI `text-embedding-3-small` | bge-m3 через LM Studio |
+| Внешние зависимости | только `OPENAI_API_KEY` | LM Studio на `:22227`, веса локально |
+| Когда выбирать | быстрый старт, апробация | без интернета / приватность |
+
+«Из коробки» (`.env.example`) включён **облачный** режим: достаточно одного
+`OPENAI_API_KEY`, LM Studio запускать не нужно. Для полностью локального режима —
+`USE_LOCAL_LLM=true` + LM Studio (см. `docs/BETA_QUICKSTART.md`).
 
 ## Архитектура
 
@@ -52,48 +63,58 @@ board IPC) — `docs/ARCHITECTURE.md`.
 git clone -b tutor-v2 https://github.com/kragger-ra/ai-professor.git AI-Professor-Tutor
 cd AI-Professor-Tutor
 
-# 2. Окружение (Python 3.10 строго — 3.11/3.12 ломают зависимости)
-py -3.10 -m venv .venv
-.venv\Scripts\activate
+# 2. Установка одной командой (идемпотентно: создаёт .venv на Python 3.10,
+#    ставит все extras, разворачивает .env из шаблона)
+setup.bat
 
-# 3. Установка зависимостей через uv (рекомендовано — pyproject использует
-# PEP-735 dependency-groups). Если нет uv: pip install uv
-uv sync --group stt --group simpletts --group gpu --group board
+# 3. Конфигурация: открой .env и впиши OPENAI_API_KEY
+#    (облачный режим — больше ничего не нужно)
 
-# Без uv (через pip): основной пакет + ручная установка optional-групп
-# pip install -e .
-# pip install "faster-whisper~=1.2" "vosk-tts~=0.3" "edge-tts~=6.1" "scipy~=1.15" "stressrnn" "num2words~=0.5" "fastapi~=0.115" "uvicorn~=0.32"
-# pip install "onnxruntime-gpu~=1.23"      # для StressRNN на GPU
-# pip install "PySide6~=6.7"               # для board sidecar
-
-# 4. Конфигурация
-copy .env.example .env
-# отредактируй .env: OPENAI_API_KEY (или USE_LOCAL_LLM=true + LM Studio)
-
-# 5. Запуск
+# 4. Запуск
 start_tutor_v2.bat
 ```
 
-Лаунчер автоматически:
-- проверяет, что LM Studio отвечает на `:22227` (warns если нет — RAG будет
-  недоступен);
-- поднимает встроенный Vosk-TTS сервер (`vosk_tts_server/`);
-- запускает board sidecar, если PySide6 установлен (`pip install -e .[board]`);
+Лаунчер `start_tutor_v2.bat` автоматически:
+- поднимает встроенный Vosk-TTS сервер (`scripts/_run_vosk_tts.bat`);
+- проверяет LM Studio на `:22227` — если запущен, доступны локальные LLM
+  и эмбеддинги; если нет — тьютор работает на облаке (LM Studio не обязателен);
+- запускает board sidecar, если установлен PySide6;
 - запускает голосовой конвейер.
 
+`stop_tutor_v2.bat` — остановка всех процессов. `start_board.bat` — поднять
+только board-панель отдельно.
+
+### Установка вручную (без `setup.bat`)
+
+```powershell
+py -3.10 -m venv .venv          # Python 3.10 строго — 3.11/3.12 ломают зависимости
+.venv\Scripts\activate
+
+# через uv (pyproject использует PEP-735 dependency-groups):
+uv sync --group stt --group simpletts --group gpu --group board
+
+# либо через pip:
+pip install -e .
+copy .env.example .env
+```
+
 Подготовка своего курса (RAG-пакета из `.md` / `.txt` / `.pdf` / `.docx`) —
-`docs/RAG_PACKAGE_GUIDE.md` или drag-and-drop в Course Builder панели board.
+`docs/RAG_PACKAGE_GUIDE.md`, CLI `tools/prepare_rag_package.py` или drag-and-drop
+в Course Builder панели board.
 
 ## Системные требования
 
 | Компонент | Минимум | Рекомендуется (тестовый стенд) |
 |---|---|---|
 | ОС | Windows 10 x64 | Windows 11 |
-| GPU | NVIDIA, 8 ГБ VRAM | NVIDIA RTX 4070, 12 ГБ VRAM |
+| GPU | NVIDIA, 8 ГБ VRAM (для STT) | NVIDIA RTX 4070, 12 ГБ VRAM |
 | RAM | 16 ГБ | 32 ГБ |
 | Диск | 20 ГБ (модели) | SSD |
 | Python | 3.10 (строго) | 3.10.11 |
 | Микрофон / выход | любой USB или встроенный | USB-микрофон + наушники |
+
+> В облачном режиме GPU нужен только для STT (faster-whisper). Полностью
+> локальный режим дополнительно требует VRAM под Gemma E4B + bge-m3.
 
 VoiceMeeter Banana НЕ требуется в одиночном режиме (`AUDIO_MODE=none`).
 Нужен только для маршрутизации в созвоны / OBS (`AUDIO_MODE=meeting`).
@@ -105,19 +126,23 @@ VoiceMeeter Banana НЕ требуется в одиночном режиме (`
 - **GPU:** NVIDIA RTX 4070, 12 ГБ VRAM, CUDA 12.x
 - **Python:** 3.10.11
 - **OS:** Windows 11 Pro 22631
-- **Ключевые зависимости** (полный список — `pyproject.toml`):
-  - `faster-whisper` ~= 1.0 (STT, ctranslate2 backend)
-  - `litellm` (LLM provider abstraction)
-  - `openai` (для прямых OpenAI-вызовов)
+- **Ключевые зависимости** (точные версии — `pyproject.toml`):
+  - `faster-whisper` (STT, ctranslate2 backend)
+  - `litellm` (LLM provider abstraction) + `openai` (прямые вызовы)
   - `langchain-community` + `faiss-cpu` (RAG)
-  - `vosk-tts` (TTS, CPU)
-  - `onnxruntime-gpu` (extra `[gpu]`, для StressRNN)
-  - `PySide6` ~= 6.7 (extra `[board]`, для sidecar)
+  - `vosk-tts` (TTS, CPU) · `stressrnn` + `onnxruntime-gpu` (авто-ударения, extra `[gpu]`)
+  - `PySide6` (extra `[board]`, для sidecar)
 
 Веса моделей **не хранятся в репо**. Подтягиваются:
-- Whisper — автоматически через `faster_whisper` при первом запуске
-- Gemma E4B + bge-m3 — вручную через LM Studio CLI (см. `STUDENT_QUICKSTART.md`)
-- Vosk-TTS — встроен в `vosk_tts_server/` (русский голос)
+- Whisper — автоматически через `faster_whisper` при первом запуске;
+- эмбеддинги — облачные (`text-embedding-3-small`) без локальных весов, либо
+  bge-m3 через LM Studio в локальном режиме;
+- Gemma E4B + bge-m3 (локальный режим) — вручную через LM Studio CLI
+  (см. `docs/BETA_QUICKSTART.md`);
+- Vosk-TTS — встроен в `vosk_tts_server/` (русский голос).
+
+> Эвалы RAG в ВКР (`research/eval_results/`) считались на bge-m3 —
+> локальной модели эмбеддингов.
 
 ## Структура проекта
 
@@ -125,8 +150,8 @@ VoiceMeeter Banana НЕ требуется в одиночном режиме (`
 tutor/                  # ядро v2
   app.py                # entry point: потоки, очереди, interrupt event
   audio/                # capture (VAD) + STT + playback + ambient
-  brain/                # agent, answer, llm, rag, meta, prompt, commands,
-                        #   course, profile, session_memory, board_extract
+  brain/                # agent, answer, llm, rag, embeddings, meta, prompt,
+                        #   commands, course, profile, session_memory
   tts/vosk_client.py    # Vosk-TTS клиент
   board_log.py          # IPC: tutor → board (JSONL append)
   commands_tail.py      # IPC: board → tutor (JSONL tail)
@@ -135,45 +160,46 @@ board/                  # PySide6 sidecar (опционально, extra [board]
   app.py, ui.py         # KaTeX-доска, чат, PDF/DOCX-ридер
   course_builder.py     # drag-and-drop индексация курса
 docs/
+  BETA_QUICKSTART.md    # пошаговый запуск на чистой машине
   ARCHITECTURE.md       # живая справка по архитектуре v2
   VOICE_COMMANDS.md     # справочник голосовых команд
-  VOICE_WALKTHROUGH.md  # сценарий первого запуска
   RAG_PACKAGE_GUIDE.md  # как собрать свой курс
+  TROUBLESHOOTING.md    # частые проблемы при запуске
 tools/
   prepare_rag_package.py  # CLI: папка → RAG-пакет
-research/               # эвалы + апробации (см. ниже)
-  aprobation/           # PersonaLab Workshop, 9 сессий (pre/post, /24)
-  aprobation_whitecoding/  # Программирование на естественном языке, 3 сессии
-  eval_results/         # отчёты, графики, raw JSON
 resources/
   Prompts/personalities_professor.yml
   RAG/course_materials/   # дефолтные .md/.txt для preset-курса
   course_config.yml       # placeholders COURSE_NAME / COURSE_TOPIC
 data/                   # gitignored: FAISS index, профиль, память сессий
-  rag_vector_store/
-  session_memory.json
-  student_profile.json
-  metrics.db
+  rag_vector_store/ · session_memory.json · student_profile.json · metrics.db
+setup.bat               # one-shot установка (.venv + extras + .env)
 start_tutor_v2.bat      # лаунчер (Vosk + board + tutor)
+start_board.bat         # запуск только board-панели
 stop_tutor_v2.bat       # остановка всех процессов
 reset_memory.bat        # сброс session_memory + student_profile + board log
 ```
+
+> `research/` (эвалы и данные апробации) и часть внутренних dev-доков —
+> приватные, исключены из публичной сборки через `.gitignore`. Раздел ниже
+> описывает их для контекста ВКР, в клоне их нет.
 
 ## Конфигурация
 
 Полный список — `.env.example`. Главные переменные:
 
-| Переменная | Назначение |
-|---|---|
-| `USE_LOCAL_LLM` | `true` — Gemma через LM Studio; `false` — облако |
-| `CORE_LLM_MODEL_NAME` | Облачная модель (litellm-формат: `openai/gpt-5.4`) |
-| `OPENAI_API_KEY` | Ключ для облачного режима |
-| `LM_STUDIO_MODEL_NAME` | `google/gemma-4-e4b` (default) |
-| `FASTER_WHISPER_MODEL_NAME` | `large-v3-turbo` или `dvislobokov/faster-whisper-large-v3-turbo-russian` |
-| `VOSK_SPEAKER_ID` | 0..4, рекомендован 3 или 4 |
-| `META_BACKEND` | `local` или `cloud` (мета-агент: тот же LM Studio или отдельная облачная mini-модель) |
-| `AUDIO_MODE` | `none` (default) / `meeting` (через VoiceMeeter) |
-| `AMBIENT_SOUND` | `on`/`off` — тихий комнатный тон (off лучше для STT) |
+| Переменная | Назначение | Default |
+|---|---|---|
+| `USE_LOCAL_LLM` | `true` — Gemma через LM Studio; `false` — облако | `false` |
+| `CORE_LLM_MODEL_NAME` | Облачная модель (litellm-формат) | `openai/gpt-4o-mini` |
+| `OPENAI_API_KEY` | Ключ для облачного режима | — |
+| `EMBEDDINGS_MODEL` | Модель эмбеддингов RAG | `text-embedding-3-small` |
+| `LM_STUDIO_MODEL_NAME` | Локальная LLM (при `USE_LOCAL_LLM=true`) | `google/gemma-4-e4b` |
+| `FASTER_WHISPER_MODEL_NAME` | STT-модель | `large-v3-turbo` (рус: `dvislobokov/...-russian`) |
+| `VOSK_SPEAKER_ID` | Голос TTS, 0..4 | `3`/`4` |
+| `META_BACKEND` | Бэкенд мета-агента: `local` / `cloud` | `local` |
+| `AUDIO_MODE` | `none` / `meeting` (через VoiceMeeter) | `none` |
+| `AMBIENT_SOUND` | `on`/`off` (off лучше для STT) | `off` |
 
 ## Research artifacts
 
@@ -191,8 +217,8 @@ reset_memory.bat        # сброс session_memory + student_profile + board lo
     точность (N=20 → N=97; halluc 22%→7.2% после disclaimer-фикса)
   - `04_external_validation.md` — bge-m3 на публичном RuBQRetrieval
     (nDCG@10=0.69, hit@1=0.61 на 1692q/56826p)
-  - `05_whitecoding_inventory.md` — стек для второго курса
-  - `charts/` — 10 PNG/SVG для презентации
+  - `05_ablation_rag_prompt.md` — абляция RAG×персона (2×2)
+  - `charts/` — PNG/SVG для презентации
   - `_*.json` — raw данные всех прогонов
 
 ## Лицензия и контекст

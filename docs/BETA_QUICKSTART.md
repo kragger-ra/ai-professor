@@ -130,8 +130,8 @@ OPENAI_API_KEY="sk-..."
 
 ```env
 USE_LOCAL_LLM="true"
-LM_STUDIO_API_BASE="http://localhost:1234/v1"
-LM_STUDIO_MODEL_NAME="gpt-4o-mini"
+LM_STUDIO_API_BASE="http://localhost:22227/v1"
+LM_STUDIO_MODEL_NAME="google/gemma-4-e4b"
 ```
 
 (LM Studio качается отдельно: https://lmstudio.ai/.)
@@ -181,7 +181,6 @@ start_tutor_v2.bat
 - `docs/RAG_PACKAGE_GUIDE.md` — как собрать большой кастомный курс.
 - `docs/VOICE_COMMANDS.md` — голосовые команды («стоп», «продолжай»,
   «загрузи курс …», «попроще», «подробнее»).
-- `docs/VOICE_WALKTHROUGH.md` — типичный сценарий первой сессии.
 
 ## Альфа-статус
 
