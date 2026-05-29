@@ -165,7 +165,7 @@ _NESTING_AND_RETURNS_DISABLED = True
 # support; answer-style adaptation already runs through the main LLM anyway.
 # When True: no name/background is extracted, injected, or saved. Flip to
 # False once sessions are stable enough for a profile to be worth keeping.
-_PROFILE_DISABLED = True
+_PROFILE_DISABLED = False
 
 
 class AgentThread(threading.Thread):
