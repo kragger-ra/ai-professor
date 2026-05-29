@@ -218,12 +218,15 @@ courses/*
 research/
 
 # Internal development docs (BDD specs in progress, demo scripts,
-# supervisor reports, dev backlog). The shipped docs/ARCHITECTURE.md,
-# RAG_PACKAGE_GUIDE.md, VOICE_*.md/pdf stay tracked.
+# supervisor reports, QA walkthroughs with internal log markers, dev
+# backlog). The shipped docs/ARCHITECTURE.md, RAG_PACKAGE_GUIDE.md,
+# TROUBLESHOOTING.md, BETA_QUICKSTART.md, VOICE_COMMANDS.md/pdf stay tracked.
 docs/BDD_BOARD_DIAGRAMS.md
 docs/DEMO_PLAN.md
 docs/development_history.md
 docs/report_supervisor.md
+docs/VOICE_WALKTHROUGH.md
+docs/VOICE_WALKTHROUGH.pdf
 IDEAS.md
 
 # Developer smoke/benchmark scripts — useful while iterating, not part
